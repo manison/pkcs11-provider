@@ -63,3 +63,9 @@ cscope.files
 cscope.out
 cscope.in.out
 cscope.po.out
+
+# Visual Studio ignore patterns
+.vs/
+bin/
+obj/
+*.user
