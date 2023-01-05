@@ -21,3 +21,7 @@ typedef intptr_t ssize_t;
 
 #define __builtin_offsetof          offsetof
 
+#ifdef _MSC_VER
+#define VLA_DEF(name, type, size)   type *name = _alloca(sizeof(type) * (size))
+#endif
+

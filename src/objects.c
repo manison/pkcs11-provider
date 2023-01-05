@@ -1088,7 +1088,7 @@ done:
 
 static CK_RV get_all_attrs(P11PROV_OBJ *obj, CK_ATTRIBUTE *attrs, int num)
 {
-    CK_ATTRIBUTE *res[num];
+    VLA_DEF(res, CK_ATTRIBUTE *, num);
     CK_RV rv;
 
     for (int i = 0; i < num; i++) {

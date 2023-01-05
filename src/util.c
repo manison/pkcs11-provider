@@ -22,8 +22,8 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                                unsigned long attrnums)
 {
     CK_SESSION_HANDLE sess = p11prov_session_handle(session);
-    CK_ATTRIBUTE q[attrnums];
-    CK_ATTRIBUTE r[attrnums];
+    VLA_DEF(q, CK_ATTRIBUTE, attrnums);
+    VLA_DEF(r, CK_ATTRIBUTE, attrnums);
     CK_RV ret;
 
     for (size_t i = 0; i < attrnums; i++) {

@@ -508,7 +508,7 @@ static CK_RV alg_set_op(OSSL_ALGORITHM **op, int idx, OSSL_ALGORITHM *alg)
 static void alg_rm_mechs(CK_ULONG *checklist, CK_ULONG *rmlist, int *clsize,
                          int rmsize)
 {
-    CK_ULONG tmplist[*clsize];
+    VLA_DEF(tmplist, CK_ULONG, *clsize);
     int t = 0;
 
     for (int i = 0; i < *clsize; i++) {

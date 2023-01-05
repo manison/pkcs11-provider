@@ -24,6 +24,10 @@
 #include <openssl/proverr.h>
 #include <openssl/core_names.h>
 
+#ifndef VLA_DEF
+#define VLA_DEF(name, type, size) type name[size]
+#endif
+
 #define UNUSED __attribute__((unused))
 #define RET_OSSL_OK 1
 #define RET_OSSL_ERR 0
