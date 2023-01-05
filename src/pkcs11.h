@@ -24,6 +24,12 @@
  * Thus, use default alignment for Crypto structures for Linux. This is also
  * the defacto standard among all other users and implementations of PKCS#11.
  */
+#ifdef WIN32
+#pragma pack(push, 1)
+#endif
 #include "oasis/pkcs11.h"
+#ifdef WIN32
+#pragma pack(pop)
+#endif
 
 #endif /* P11PROV_PKCS11_H_ */
