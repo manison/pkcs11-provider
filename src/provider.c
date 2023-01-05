@@ -2,7 +2,6 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
-#include <pthread.h>
 #include <dlfcn.h>
 #include <string.h>
 
@@ -17,7 +16,7 @@ struct p11prov_ctx {
         P11PROV_IN_ERROR,
     } status;
 
-    pthread_rwlock_t rwlock;
+    p11prov_rwlock_t rwlock;
 
     /* Provider handles */
     const OSSL_CORE_HANDLE *handle;
@@ -67,7 +66,7 @@ CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
     int lock;
     CK_RV ret;
 
-    lock = pthread_rwlock_rdlock(&ctx->rwlock);
+    lock = p11prov_rwlock_rdlock(&ctx->rwlock);
     if (lock != 0) {
         ret = CKR_CANT_LOCK;
         P11PROV_raise(ctx, ret, "Failure to rdlock! (%d)", errno);
@@ -108,7 +107,7 @@ CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
     ret = CKR_OK;
 
 done:
-    lock = pthread_rwlock_unlock(&ctx->rwlock);
+    lock = p11prov_rwlock_rdunlock(&ctx->rwlock);
     if (lock != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK, "Failure to unlock! (%d)", errno);
         /* we do not return an error in this case, as we got the info */
@@ -156,7 +155,7 @@ CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
         memcpy(_data, data, _size);
     }
 
-    lock = pthread_rwlock_wrlock(&ctx->rwlock);
+    lock = p11prov_rwlock_wrlock(&ctx->rwlock);
     if (lock != 0) {
         ret = CKR_CANT_LOCK;
         P11PROV_raise(ctx, ret, "Failure to wrlock! (%d)", errno);
@@ -207,7 +206,7 @@ CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
 
 done:
     P11PROV_debug("Set quirk '%s' of size %lu", name, size);
-    lock = pthread_rwlock_unlock(&ctx->rwlock);
+    lock = p11prov_rwlock_wrunlock(&ctx->rwlock);
     if (lock != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK, "Failure to unlock! (%d)", errno);
         /* we do not return an error in this case, as we got the info */
@@ -269,7 +268,7 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
     int ret;
 
     if (ctx->status != P11PROV_UNINITIALIZED) {
-        ret = pthread_rwlock_wrlock(&ctx->rwlock);
+        ret = p11prov_rwlock_wrlock(&ctx->rwlock);
         if (ret != 0) {
             P11PROV_raise(ctx, CKR_CANT_LOCK,
                           "Failure to wrlock! Data corruption may happen (%d)",
@@ -308,14 +307,14 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
     }
 
     if (ctx->status != P11PROV_UNINITIALIZED) {
-        ret = pthread_rwlock_unlock(&ctx->rwlock);
+        ret = p11prov_rwlock_wrunlock(&ctx->rwlock);
         if (ret != 0) {
             P11PROV_raise(ctx, CKR_CANT_LOCK,
                           "Failure to unlock! Data corruption may happen (%d)",
                           errno);
         }
     }
-    ret = pthread_rwlock_destroy(&ctx->rwlock);
+    ret = p11prov_rwlock_destroy(&ctx->rwlock);
     if (ret != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK,
                       "Failure to free lock! Data corruption may happen (%d)",
@@ -1014,7 +1013,7 @@ static int p11prov_module_init(P11PROV_CTX *ctx)
 
     ctx->status = P11PROV_INITIALIZED;
 
-    ret = pthread_rwlock_init(&ctx->rwlock, NULL);
+    ret = p11prov_rwlock_init(&ctx->rwlock);
     if (ret != 0) {
         ret = errno;
         P11PROV_debug("rwlock init failed (%d)", ret);

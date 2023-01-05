@@ -9,6 +9,7 @@
 #pragma warning(pop)
 #include <intrin.h>
 #include "win_atomic.h"
+#include "win_sync.h"
 
 #ifdef _M_X64
 // conversion from 'size_t' to 'CK_ULONG', possible loss of data

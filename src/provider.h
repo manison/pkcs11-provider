@@ -65,6 +65,17 @@ typedef struct p11prov_slots_ctx P11PROV_SLOTS_CTX;
 typedef struct p11prov_session P11PROV_SESSION;
 typedef struct p11prov_session_pool P11PROV_SESSION_POOL;
 
+#ifndef WIN32
+#include <pthread.h>
+typedef pthread_rwlock_t p11prov_rwlock_t;
+#define p11prov_rwlock_init(l)      pthread_rwlock_init(l, NULL)
+#define p11prov_rwlock_destroy(l)   pthread_rwlock_destroy(l)
+#define p11prov_rwlock_rdlock(l)    pthread_rwlock_rdlock(l)
+#define p11prov_rwlock_rdunlock(l)  pthread_rwlock_unlock(l)
+#define p11prov_rwlock_rwlock(l)    pthread_rwlock_rwlock(l)
+#define p11prov_rwlock_rwunlock(l)  pthread_rwlock_unlock(l)
+#endif
+
 /* Provider ctx */
 struct p11prov_interface *p11prov_ctx_get_interface(P11PROV_CTX *ctx);
 CK_UTF8CHAR_PTR p11prov_ctx_pin(P11PROV_CTX *ctx);

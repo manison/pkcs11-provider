@@ -22,7 +22,7 @@ struct p11prov_slots_ctx {
     P11PROV_CTX *provctx;
     P11PROV_SLOT **slots;
     int num;
-    pthread_rwlock_t rwlock;
+    p11prov_rwlock_t rwlock;
 };
 
 static CK_RV session_pool_init(P11PROV_CTX *ctx, CK_TOKEN_INFO *token,
@@ -137,7 +137,7 @@ CK_RV p11prov_init_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
     }
     sctx->provctx = ctx;
 
-    err = pthread_rwlock_init(&sctx->rwlock, NULL);
+    err = p11prov_rwlock_init(&sctx->rwlock);
     if (err != 0) {
         err = errno;
         ret = CKR_CANT_LOCK;
@@ -235,7 +235,7 @@ void p11prov_free_slots(P11PROV_SLOTS_CTX *sctx)
     if (!sctx) {
         return;
     }
-    err = pthread_rwlock_destroy(&sctx->rwlock);
+    err = p11prov_rwlock_destroy(&sctx->rwlock);
     if (err != 0) {
         err = errno;
         P11PROV_raise(sctx->provctx, CKR_CANT_LOCK,
@@ -265,7 +265,7 @@ CK_RV p11prov_take_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
         return CKR_GENERAL_ERROR;
     }
 
-    err = pthread_rwlock_rdlock(&sctx->rwlock);
+    err = p11prov_rwlock_rdlock(&sctx->rwlock);
     if (err != 0) {
         err = errno;
         P11PROV_raise(ctx, CKR_CANT_LOCK, "Failed to get slots lock (errno:%d)",
@@ -280,7 +280,7 @@ CK_RV p11prov_take_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
 void p11prov_return_slots(P11PROV_SLOTS_CTX *sctx)
 {
     int err;
-    err = pthread_rwlock_unlock(&sctx->rwlock);
+    err = p11prov_rwlock_rdunlock(&sctx->rwlock);
     if (err != 0) {
         err = errno;
         P11PROV_raise(sctx->provctx, CKR_CANT_LOCK,
