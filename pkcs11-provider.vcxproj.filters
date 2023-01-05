@@ -1,0 +1,45 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="src\asymmetric_cipher.c" />
+    <ClCompile Include="src\debug.c" />
+    <ClCompile Include="src\digests.c" />
+    <ClCompile Include="src\encoder.c" />
+    <ClCompile Include="src\exchange.c" />
+    <ClCompile Include="src\interface.c" />
+    <ClCompile Include="src\kdf.c" />
+    <ClCompile Include="src\keymgmt.c" />
+    <ClCompile Include="src\objects.c" />
+    <ClCompile Include="src\provider.c" />
+    <ClCompile Include="src\session.c" />
+    <ClCompile Include="src\signature.c" />
+    <ClCompile Include="src\store.c" />
+    <ClCompile Include="src\tls.c" />
+    <ClCompile Include="src\util.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\asymmetric_cipher.h" />
+    <ClInclude Include="src\debug.h" />
+    <ClInclude Include="src\digests.h" />
+    <ClInclude Include="src\encoder.h" />
+    <ClInclude Include="src\exchange.h" />
+    <ClInclude Include="src\interface.h" />
+    <ClInclude Include="src\kdf.h" />
+    <ClInclude Include="src\keymgmt.h" />
+    <ClInclude Include="src\objects.h" />
+    <ClInclude Include="src\pkcs11.h" />
+    <ClInclude Include="src\provider.h" />
+    <ClInclude Include="src\session.h" />
+    <ClInclude Include="src\signature.h" />
+    <ClInclude Include="src\store.h" />
+    <ClInclude Include="src\util.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="platform">
+      <UniqueIdentifier>{80051d2d-a908-44a8-8ff8-ff822fd8c444}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="platform\windows">
+      <UniqueIdentifier>{f465a435-fd43-4e78-b445-106297012c1d}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
