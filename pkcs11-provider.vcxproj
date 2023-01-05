@@ -58,6 +58,8 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <CompileAs>CompileAsC</CompileAs>
+      <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <PreprocessorDefinitions>WIN32;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -130,6 +132,8 @@
     <ClInclude Include="src\keymgmt.h" />
     <ClInclude Include="src\objects.h" />
     <ClInclude Include="src\pkcs11.h" />
+    <ClInclude Include="src\platform\windows\win_atomic.h" />
+    <ClInclude Include="src\platform\windows\win_compat.h" />
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\session.h" />
     <ClInclude Include="src\signature.h" />

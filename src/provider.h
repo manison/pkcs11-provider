@@ -5,7 +5,11 @@
 #define _PROVIDER_H
 
 #define _XOPEN_SOURCE 500
+#ifdef WIN32
+#include "platform/windows/win_compat.h"
+#else
 #include "config.h"
+#endif
 
 #include <stdbool.h>
 
