@@ -500,6 +500,22 @@ int p11prov_get_pin(const char *in, char **out)
  */
 bool cyclewait_with_timeout(uint64_t max_wait, uint64_t interval,
                             uint64_t *start_time)
+#ifdef WIN32
+{
+    max_wait /= 1000000;  // milliseconds
+    uint64_t current_time = GetTickCount64();
+    if (*start_time == 0) {
+        *start_time = current_time;
+    } else {
+        if (current_time > *start_time + max_wait) {
+            return false;
+        }
+    }
+
+    Sleep(1);
+    return true;
+}
+#else
 {
 #define NANOS_SEC 1000000000
     uint64_t current_time;
@@ -529,6 +545,7 @@ bool cyclewait_with_timeout(uint64_t max_wait, uint64_t interval,
 
     return true;
 }
+#endif
 
 void byteswap_buf(unsigned char *src, unsigned char *dest, size_t len)
 {
