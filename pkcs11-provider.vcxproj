@@ -134,6 +134,7 @@
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\platform\windows\win_atomic.h" />
     <ClInclude Include="src\platform\windows\win_compat.h" />
+    <ClInclude Include="src\platform\windows\win_dlfcn.h" />
     <ClInclude Include="src\platform\windows\win_sync.h" />
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\session.h" />

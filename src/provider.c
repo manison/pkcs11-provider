@@ -2,7 +2,9 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#ifndef WIN32
 #include <dlfcn.h>
+#endif
 #include <string.h>
 
 struct p11prov_interface;

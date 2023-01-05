@@ -9,6 +9,7 @@
 #pragma warning(pop)
 #include <intrin.h>
 #include "win_atomic.h"
+#include "win_dlfcn.h"
 #include "win_sync.h"
 
 #ifdef _M_X64

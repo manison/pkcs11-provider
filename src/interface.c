@@ -2,7 +2,9 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#ifndef WIN32
 #include <dlfcn.h>
+#endif
 
 /* Wrapper Interface on top of PKCS#11 interfaces.
  * This allows us to support multiple versions of PKCS#11 drivers

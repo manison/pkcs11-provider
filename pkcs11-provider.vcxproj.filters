@@ -42,6 +42,9 @@
     <ClInclude Include="src\platform\windows\win_sync.h">
       <Filter>platform\windows</Filter>
     </ClInclude>
+    <ClInclude Include="src\platform\windows\win_dlfcn.h">
+      <Filter>platform\windows</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">
