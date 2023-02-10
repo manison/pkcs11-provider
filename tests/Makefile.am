@@ -30,23 +30,26 @@ tmp.softokn:
 	LIBSPATH=$(libspath) \
 	TESTSSRCDIR=$(testssrcdir) \
 	TESTBLDDIR=$(testsblddir) \
+	SHARED_EXT=$(SHARED_EXT) \
 	SOFTOKNPATH="$(SOFTOKENDIR)/$(SOFTOKEN_SUBDIR)" \
 	$(testssrcdir)/setup-softokn.sh > setup-softokn.log 2>&1
 tmp.softhsm:
 	LIBSPATH=$(libspath) \
 	TESTSSRCDIR=$(testssrcdir) \
 	TESTBLDDIR=$(testsblddir) \
+	SHARED_EXT=$(SHARED_EXT) \
 	P11KITCLIENTPATH="$(P11KITCLIENTPATH)" \
 	$(testssrcdir)/setup-softhsm.sh > setup-softhsm.log 2>&1
 
 dist_check_SCRIPTS = \
 	helpers.sh setup-softhsm.sh setup-softokn.sh softhsm-proxy.sh \
-	test-wrapper tbasic tcerts teccsha2 thkdf toaepsha2 trsapss
+	test-wrapper tbasic tcerts tecc tecdh thkdf toaepsha2 trsapss
 
 test_LIST = \
 	basic-softokn basic-softhsm-proxy \
 	certs-softokn certs-softhsm-proxy \
-	eccsha2-softokn \
+	ecc-softokn ecc-softhsm-proxy \
+	ecdh-softokn \
 	oaepsha2-softokn \
 	hkdf-softokn \
 	rsapss-softokn \

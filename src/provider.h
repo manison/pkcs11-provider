@@ -4,7 +4,10 @@
 #ifndef _PROVIDER_H
 #define _PROVIDER_H
 
-#define _XOPEN_SOURCE 500
+/* on macOS, snprintf and vsnprintf are in -D_XOPEN_SOURCE=600. This may be
+ * a bug in macOS' headers, or a deliberate choice because snprintf changed
+ * behavior with X/Open 6. */
+#define _XOPEN_SOURCE 600
 #ifdef WIN32
 #include "platform/windows/win_compat.h"
 #else
@@ -12,6 +15,7 @@
 #endif
 
 #include <stdbool.h>
+#include <sys/types.h>
 
 #include "pkcs11.h"
 #include <openssl/core_dispatch.h>
@@ -23,6 +27,7 @@
 #include <openssl/err.h>
 #include <openssl/proverr.h>
 #include <openssl/core_names.h>
+#include <openssl/provider.h>
 
 #ifndef VLA_DEF
 #define VLA_DEF(name, type, size) type name[size]
@@ -55,6 +60,7 @@
 
 #define P11PROV_PARAM_KEY_LABEL "pkcs11_key_label"
 #define P11PROV_PARAM_KEY_ID "pkcs11_key_id"
+#define P11PROV_PARAM_SLOT_ID "pkcs11_slot_id"
 
 typedef struct p11prov_ctx P11PROV_CTX;
 typedef struct p11prov_interface P11PROV_INTERFACE;
