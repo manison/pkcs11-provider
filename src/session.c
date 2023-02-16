@@ -959,9 +959,8 @@ static CK_RV slot_login(P11PROV_SLOT *slot, P11PROV_URI *uri,
     /* we have a locked session, check that it is ok */
     ret = session_check(session, flags, &state);
     if (ret == CKR_OK) {
-        if (state == CKS_RW_PUBLIC_SESSION || state == CKS_RW_USER_FUNCTIONS
-            || state == CKS_RW_SO_FUNCTIONS) {
-            /* we have a valid logged in session */
+        if (state != CKS_RO_PUBLIC_SESSION) {
+            /* we seem to have a valid logged in session */
             goto done;
         }
     } else {
@@ -1074,11 +1073,8 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
         if (ret != CKR_OK) {
             goto done;
         }
-        if ((slot->token.flags & CKF_LOGIN_REQUIRED) || reqlogin) {
+        if (reqlogin) {
             ret = slot_login(slot, uri, pw_cb, pw_cbarg, NULL);
-            if (ret == CKR_CANCEL && !reqlogin) {
-                ret = CKR_OK;
-            }
             if (ret != CKR_OK) {
                 goto done;
             }
@@ -1102,11 +1098,8 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
                 /* keep going */
                 continue;
             }
-            if ((slot->token.flags & CKF_LOGIN_REQUIRED) || reqlogin) {
+            if (reqlogin) {
                 ret = slot_login(slot, uri, pw_cb, pw_cbarg, NULL);
-                if (ret == CKR_CANCEL && !reqlogin) {
-                    ret = CKR_OK;
-                }
                 if (ret != CKR_OK) {
                     /* keep going */
                     continue;
