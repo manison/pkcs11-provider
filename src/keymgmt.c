@@ -475,7 +475,15 @@ static const OSSL_PARAM *p11prov_rsa_gen_settable_params(void *genctx,
 
 static void *p11prov_rsa_new(void *provctx)
 {
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    CK_RV ret;
+
     P11PROV_debug("rsa new");
+
+    ret = p11prov_ctx_status(ctx);
+    if (ret != CKR_OK) {
+        return NULL;
+    }
 
     return p11prov_obj_new(provctx, CK_UNAVAILABLE_INFORMATION,
                            CK_INVALID_HANDLE, CK_UNAVAILABLE_INFORMATION);
@@ -593,7 +601,7 @@ static const OSSL_PARAM *p11prov_rsa_export_types(int selection)
 
 static const char *p11prov_rsa_query_operation_name(int operation_id)
 {
-    return P11PROV_NAMES_RSA;
+    return P11PROV_NAME_RSA;
 }
 
 static int p11prov_rsa_secbits(int bits)
@@ -858,7 +866,16 @@ DISPATCH_KEYMGMT_FN(ec, gettable_params);
 
 static void *p11prov_ec_new(void *provctx)
 {
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    CK_RV ret;
+
     P11PROV_debug("ec new");
+
+    ret = p11prov_ctx_status(ctx);
+    if (ret != CKR_OK) {
+        return NULL;
+    }
+
     return NULL;
 }
 
@@ -1032,9 +1049,9 @@ static const char *p11prov_ec_query_operation_name(int operation_id)
 {
     switch (operation_id) {
     case OSSL_OP_SIGNATURE:
-        return P11PROV_NAMES_ECDSA;
+        return P11PROV_NAME_ECDSA;
     case OSSL_OP_KEYEXCH:
-        return P11PROV_NAMES_ECDH;
+        return P11PROV_NAME_ECDH;
     }
     return NULL;
 }
@@ -1176,7 +1193,16 @@ const void *p11prov_hkdf_static_ctx = NULL;
 
 static void *p11prov_hkdf_new(void *provctx)
 {
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    CK_RV ret;
+
     P11PROV_debug("hkdf keymgmt new");
+
+    ret = p11prov_ctx_status(ctx);
+    if (ret != CKR_OK) {
+        return NULL;
+    }
+
     return (void *)&p11prov_hkdf_static_ctx;
 }
 
@@ -1194,7 +1220,7 @@ static const char *p11prov_hkdf_query_operation_name(int operation_id)
 {
     P11PROV_debug("hkdf keymgmt query op name %d", operation_id);
 
-    return P11PROV_NAMES_HKDF;
+    return P11PROV_NAME_HKDF;
 }
 
 static int p11prov_hkdf_has(const void *kdfdata, int selection)

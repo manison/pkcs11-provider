@@ -45,17 +45,23 @@
 #define P11PROV_PKCS11_MODULE_LOGIN_BEHAVIOR "pkcs11-module-login-behavior"
 
 #define P11PROV_DEFAULT_PROPERTIES "provider=pkcs11"
+#define P11PROV_NAME_RSA "RSA"
 #define P11PROV_NAMES_RSA "RSA:rsaEncryption:1.2.840.113549.1.1.1"
 #define P11PROV_DESCS_RSA "PKCS11 RSA Implementation"
+#define P11PROV_NAME_RSAPSS "RSA-PSS"
 #define P11PROV_NAMES_RSAPSS "RSA-PSS:RSASSA-PSS:1.2.840.113549.1.1.10"
 #define P11PROV_DESCS_RSAPSS "PKCS11 RSA PSS Implementation"
+#define P11PROV_NAME_EC "EC"
 #define P11PROV_NAMES_EC "EC:id-ecPublicKey:1.2.840.10045.2.1"
 #define P11PROV_DESCS_EC "PKCS11 EC Implementation"
-#define P11PROV_NAMES_ECDSA "ECDSA"
+#define P11PROV_NAME_ECDSA "ECDSA"
+#define P11PROV_NAMES_ECDSA P11PROV_NAME_ECDSA
 #define P11PROV_DESCS_ECDSA "PKCS11 ECDSA Implementation"
-#define P11PROV_NAMES_ECDH "ECDH"
+#define P11PROV_NAME_ECDH "ECDH"
+#define P11PROV_NAMES_ECDH P11PROV_NAME_ECDH
 #define P11PROV_DESCS_ECDH "PKCS11 ECDH Implementation"
-#define P11PROV_NAMES_HKDF "HKDF"
+#define P11PROV_NAME_HKDF "HKDF"
+#define P11PROV_NAMES_HKDF P11PROV_NAME_HKDF
 #define P11PROV_DESCS_HKDF "PKCS11 HKDF Implementation"
 #define P11PROV_DESCS_URI "PKCS11 URI Store"
 
@@ -64,6 +70,7 @@
 #define P11PROV_PARAM_SLOT_ID "pkcs11_slot_id"
 
 typedef struct p11prov_ctx P11PROV_CTX;
+typedef struct p11prov_module_ctx P11PROV_MODULE;
 typedef struct p11prov_interface P11PROV_INTERFACE;
 typedef struct p11prov_uri P11PROV_URI;
 typedef struct p11prov_obj P11PROV_OBJ;
@@ -84,11 +91,12 @@ typedef pthread_rwlock_t p11prov_rwlock_t;
 #endif
 
 /* Provider ctx */
-struct p11prov_interface *p11prov_ctx_get_interface(P11PROV_CTX *ctx);
+P11PROV_INTERFACE *p11prov_ctx_get_interface(P11PROV_CTX *ctx);
 CK_UTF8CHAR_PTR p11prov_ctx_pin(P11PROV_CTX *ctx);
 OSSL_LIB_CTX *p11prov_ctx_get_libctx(P11PROV_CTX *ctx);
 CK_RV p11prov_ctx_status(P11PROV_CTX *ctx);
 P11PROV_SLOTS_CTX *p11prov_ctx_get_slots(P11PROV_CTX *ctx);
+void p11prov_ctx_set_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX *slots);
 CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
                             void **data, CK_ULONG *size);
 CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
