@@ -86,8 +86,8 @@ typedef pthread_rwlock_t p11prov_rwlock_t;
 #define p11prov_rwlock_destroy(l)   pthread_rwlock_destroy(l)
 #define p11prov_rwlock_rdlock(l)    pthread_rwlock_rdlock(l)
 #define p11prov_rwlock_rdunlock(l)  pthread_rwlock_unlock(l)
-#define p11prov_rwlock_rwlock(l)    pthread_rwlock_rwlock(l)
-#define p11prov_rwlock_rwunlock(l)  pthread_rwlock_unlock(l)
+#define p11prov_rwlock_wrlock(l)    pthread_rwlock_wrlock(l)
+#define p11prov_rwlock_wrunlock(l)  pthread_rwlock_unlock(l)
 #endif
 
 /* Provider ctx */
