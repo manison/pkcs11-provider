@@ -1,3 +1,6 @@
+/* Copyright (C) 2023 manison <manison@users.noreply.github.com>
+   SPDX-License-Identifier: Apache-2.0 */
+
 #pragma once
 
 typedef SRWLOCK p11prov_rwlock_t;

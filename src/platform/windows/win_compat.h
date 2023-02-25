@@ -1,3 +1,6 @@
+/* Copyright (C) 2023 manison <manison@users.noreply.github.com>
+   SPDX-License-Identifier: Apache-2.0 */
+
 #pragma once
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN

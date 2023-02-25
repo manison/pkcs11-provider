@@ -1,3 +1,6 @@
+/* Copyright (C) 2023 manison <manison@users.noreply.github.com>
+   SPDX-License-Identifier: Apache-2.0 */
+
 #pragma once
 
 static __forceinline void * __win32_dlopen(const char *module)
