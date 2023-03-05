@@ -1,0 +1,47 @@
+#!/bin/bash -e
+# Copyright (C) 2023 Simo Sorce <simo@redhat.com>
+# SPDX-License-Identifier: Apache-2.0
+
+source ${TESTSSRCDIR}/helpers.sh
+
+title PARA "Export ED25519 Public key to a file"
+ossl 'pkey -in $EDPUBURI -pubin -pubout -out ${TMPPDIR}/edout.pub'
+
+title LINE "Print ED25519 Public key from private"
+ossl 'pkey -in $EDPRIURI -pubout -text' output
+FAIL=0
+echo $output | grep "ED25519 Public-Key" > /dev/null 2>&1 || FAIL=1
+if [ $FAIL -eq 1 ]; then
+    echo "Could not extract public key from private"
+    echo
+    echo "Original command output:"
+    echo "$output"
+    echo
+    exit 1
+fi
+
+
+# FIXME: Currently not test backend supports CKM_EDDSA
+# SoftHSM does support it with Ed25519, but the p11-proxy we have to use to
+# avoid segfaults in the destructors does not support proxying CKM_EDDSA
+exit 0
+
+title PARA "DigestSign and DigestVerify with ED25519"
+ossl '
+pkeyutl -sign -inkey "${EDBASEURI}"
+              -in ${RAND64FILE}
+              -rawin
+              -out ${TMPPDIR}/sha256-eddgstsig.bin'
+ossl '
+pkeyutl -verify -inkey "${EDBASEURI}" -pubin
+                -in ${RAND64FILE}
+                -rawin
+                -sigfile ${TMPPDIR}/sha256-eddgstsig.bin'
+
+title PARA "Test CSR generation from private ED25519 keys"
+ossl '
+req -new -batch -key "${EDPRIURI}" -out ${TMPPDIR}/ed25519_csr.pem'
+ossl '
+req -in ${TMPPDIR}/ed25519_csr.pem -verify -noout'
+
+exit 0
