@@ -27,6 +27,7 @@ struct p11prov_crt {
 
 struct p11prov_obj {
     P11PROV_CTX *ctx;
+    bool raf; /* re-init after fork */
 
     CK_SLOT_ID slotid;
     CK_OBJECT_HANDLE handle;
@@ -44,12 +45,207 @@ struct p11prov_obj {
     int numattrs;
 
     int refcnt;
+    int poolid;
 };
+
+struct p11prov_obj_pool {
+    P11PROV_CTX *provctx;
+    CK_SLOT_ID slotid;
+
+    P11PROV_OBJ **objects;
+    int size;
+    int num;
+    int first_free;
+
+    pthread_mutex_t lock;
+};
+
+CK_RV p11prov_obj_pool_init(P11PROV_CTX *ctx, CK_SLOT_ID id,
+                            P11PROV_OBJ_POOL **_pool)
+{
+    P11PROV_OBJ_POOL *pool;
+    int ret;
+
+    P11PROV_debug("Creating new object pool");
+
+    pool = OPENSSL_zalloc(sizeof(P11PROV_OBJ_POOL));
+    if (!pool) {
+        return CKR_HOST_MEMORY;
+    }
+    pool->provctx = ctx;
+    pool->slotid = id;
+
+    ret = MUTEX_INIT(pool);
+    if (ret != CKR_OK) {
+        OPENSSL_free(pool);
+        return ret;
+    }
+
+    P11PROV_debug("New object pool %p created", pool);
+
+    *_pool = pool;
+    return CKR_OK;
+}
+
+void p11prov_obj_pool_free(P11PROV_OBJ_POOL *pool)
+{
+    P11PROV_debug("Freeing object pool %p", pool);
+
+    if (!pool) {
+        return;
+    }
+
+    if (MUTEX_LOCK(pool) == CKR_OK) {
+        /* LOCKED SECTION ------------- */
+        if (pool->num != 0) {
+            P11PROV_debug("%d objects still in pool", pool->num);
+        }
+        OPENSSL_free(pool->objects);
+        (void)MUTEX_UNLOCK(pool);
+        /* ------------- LOCKED SECTION */ }
+    else {
+        P11PROV_debug("Failed to lock object pool, leaking it!");
+        return;
+    }
+
+    (void)MUTEX_DESTROY(pool);
+    OPENSSL_clear_free(pool, sizeof(P11PROV_OBJ_POOL));
+}
+
+void p11prov_obj_pool_fork_reset(P11PROV_OBJ_POOL *pool)
+{
+    P11PROV_debug("Resetting objects in pool %p", pool);
+
+    if (!pool) {
+        return;
+    }
+
+    if (MUTEX_LOCK(pool) == CKR_OK) {
+        /* LOCKED SECTION ------------- */
+        for (int i = 0; i < pool->size; i++) {
+            P11PROV_OBJ *obj = pool->objects[i];
+
+            if (!obj) {
+                continue;
+            }
+            obj->raf = true;
+            obj->handle = CK_INVALID_HANDLE;
+            obj->cached = CK_INVALID_HANDLE;
+        }
+
+        (void)MUTEX_UNLOCK(pool);
+        /* ------------- LOCKED SECTION */
+    } else {
+        P11PROV_debug("Failed to reset objects in pool");
+    }
+}
+
+#define POOL_ALLOC_SIZE 32
+#define POOL_MAX_SIZE (POOL_ALLOC_SIZE * (1 << 16))
+static CK_RV obj_add_to_pool(P11PROV_OBJ *obj)
+{
+    P11PROV_OBJ_POOL *pool;
+    CK_RV ret;
+
+    ret = p11prov_slot_get_obj_pool(obj->ctx, obj->slotid, &pool);
+    if (ret != CKR_OK) {
+        return ret;
+    }
+
+    ret = MUTEX_LOCK(pool);
+    if (ret != CKR_OK) {
+        return ret;
+    }
+
+    /* LOCKED SECTION ------------- */
+    if (pool->num >= pool->size) {
+        P11PROV_OBJ **tmp;
+
+        if (pool->size >= POOL_MAX_SIZE) {
+            ret = CKR_HOST_MEMORY;
+            P11PROV_raise(pool->provctx, ret, "Too many objects in pool");
+            goto done;
+        }
+        tmp = OPENSSL_realloc(pool->objects, (pool->size + POOL_ALLOC_SIZE)
+                                                 * sizeof(P11PROV_OBJ *));
+        if (tmp == NULL) {
+            ret = CKR_HOST_MEMORY;
+            P11PROV_raise(pool->provctx, ret,
+                          "Failed to re-allocate objects array");
+            goto done;
+        }
+        memset(&tmp[pool->size], 0, POOL_ALLOC_SIZE * sizeof(P11PROV_OBJ *));
+        pool->objects = tmp;
+        pool->size += POOL_ALLOC_SIZE;
+    }
+
+    if (pool->first_free >= pool->size) {
+        pool->first_free = 0;
+    }
+
+    for (int i = 0; i < pool->size; i++) {
+        int idx = (i + pool->first_free) % pool->size;
+        if (pool->objects[idx] == NULL) {
+            pool->objects[idx] = obj;
+            pool->num++;
+            obj->poolid = idx;
+            pool->first_free = idx + 1;
+            ret = CKR_OK;
+            goto done;
+        }
+    }
+
+    /* if we couldn't find a free pool spot at this point,
+     * something clearly went wrong, bail out */
+    ret = CKR_GENERAL_ERROR;
+    P11PROV_raise(pool->provctx, ret, "Objects pool in inconsistent state");
+
+done:
+    (void)MUTEX_UNLOCK(pool);
+    /* ------------- LOCKED SECTION */
+
+    return ret;
+}
+
+static void obj_rm_from_pool(P11PROV_OBJ *obj)
+{
+    P11PROV_OBJ_POOL *pool;
+    CK_RV ret;
+
+    ret = p11prov_slot_get_obj_pool(obj->ctx, obj->slotid, &pool);
+    if (ret != CKR_OK) {
+        return;
+    }
+
+    ret = MUTEX_LOCK(pool);
+    if (ret != CKR_OK) {
+        return;
+    }
+
+    /* LOCKED SECTION ------------- */
+    if (obj->poolid > pool->size || pool->objects[obj->poolid] != obj) {
+        ret = CKR_GENERAL_ERROR;
+        P11PROV_raise(pool->provctx, ret, "Objects pool in inconsistent state");
+        goto done;
+    }
+
+    pool->objects[obj->poolid] = NULL;
+    pool->num--;
+    if (pool->first_free > obj->poolid) {
+        pool->first_free = obj->poolid;
+    }
+    obj->poolid = 0;
+
+done:
+    (void)MUTEX_UNLOCK(pool);
+    /* ------------- LOCKED SECTION */
+}
 
 P11PROV_OBJ *p11prov_obj_new(P11PROV_CTX *ctx, CK_SLOT_ID slotid,
                              CK_OBJECT_HANDLE handle, CK_OBJECT_CLASS class)
 {
     P11PROV_OBJ *obj;
+    CK_RV ret;
 
     obj = OPENSSL_zalloc(sizeof(P11PROV_OBJ));
     if (obj == NULL) {
@@ -63,6 +259,11 @@ P11PROV_OBJ *p11prov_obj_new(P11PROV_CTX *ctx, CK_SLOT_ID slotid,
 
     obj->refcnt = 1;
 
+    ret = obj_add_to_pool(obj);
+    if (ret != CKR_OK) {
+        OPENSSL_free(obj);
+        obj = NULL;
+    }
     return obj;
 }
 
@@ -151,8 +352,8 @@ static void cache_key(P11PROV_OBJ *obj)
     destroy_key_cache(obj, session);
 
     sess = p11prov_session_handle(session);
-    ret = p11prov_CopyObject(obj->ctx, sess, obj->handle, template, 1,
-                             &obj->cached);
+    ret = p11prov_CopyObject(obj->ctx, sess, p11prov_obj_get_handle(obj),
+                             template, 1, &obj->cached);
     if (ret != CKR_OK) {
         P11PROV_raise(obj->ctx, ret, "Failed to cache key");
         if (ret == CKR_FUNCTION_NOT_SUPPORTED) {
@@ -175,7 +376,7 @@ static void cache_key(P11PROV_OBJ *obj)
 
 P11PROV_OBJ *p11prov_obj_ref_no_cache(P11PROV_OBJ *obj)
 {
-    P11PROV_debug("Ref Object: %p (handle:%lu)\n", obj,
+    P11PROV_debug("Ref Object: %p (handle:%lu)", obj,
                   obj ? obj->handle : CK_INVALID_HANDLE);
 
     if (obj && __atomic_fetch_add(&obj->refcnt, 1, __ATOMIC_SEQ_CST) > 0) {
@@ -206,7 +407,7 @@ P11PROV_OBJ *p11prov_obj_ref(P11PROV_OBJ *obj)
 
 void p11prov_obj_free(P11PROV_OBJ *obj)
 {
-    P11PROV_debug("Free Object: %p (handle:%lu)\n", obj,
+    P11PROV_debug("Free Object: %p (handle:%lu)", obj,
                   obj ? obj->handle : CK_INVALID_HANDLE);
 
     if (obj == NULL) {
@@ -216,6 +417,8 @@ void p11prov_obj_free(P11PROV_OBJ *obj)
         P11PROV_debug("object free: reference held");
         return;
     }
+
+    obj_rm_from_pool(obj);
 
     destroy_key_cache(obj, NULL);
 
@@ -235,9 +438,14 @@ CK_SLOT_ID p11prov_obj_get_slotid(P11PROV_OBJ *obj)
     return CK_UNAVAILABLE_INFORMATION;
 }
 
+static void p11prov_obj_refresh(P11PROV_OBJ *obj);
+
 CK_OBJECT_HANDLE p11prov_obj_get_handle(P11PROV_OBJ *obj)
 {
     if (obj) {
+        if (obj->raf) {
+            p11prov_obj_refresh(obj);
+        }
         if (obj->cached != CK_INVALID_HANDLE) {
             return obj->cached;
         }
@@ -774,7 +982,8 @@ CK_RV p11prov_obj_find(P11PROV_CTX *provctx, P11PROV_SESSION *session,
         }
     }
 
-    P11PROV_debug("Find objects: found %lu objects", total);
+    P11PROV_debug("Find objects: found %lu objects; Returning %lx", total,
+                  result);
     OPENSSL_free(objects);
     return result;
 }
@@ -806,7 +1015,7 @@ static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
     slotid = p11prov_obj_get_slotid(obj);
 
     ret = p11prov_get_session(provctx, &slotid, NULL, NULL,
-                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, false,
+                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, true,
                               false, &session);
     if (ret != CKR_OK) {
         goto done;
@@ -845,6 +1054,37 @@ static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
 done:
     p11prov_return_session(session);
     return retobj;
+}
+
+static void p11prov_obj_refresh(P11PROV_OBJ *obj)
+{
+    P11PROV_OBJ *tmp = NULL;
+    tmp = find_associated_obj(obj->ctx, obj, obj->class);
+    if (!tmp) {
+        /* nothing we can do, invalid handle it is */
+        return;
+    }
+
+    /* move over all the object data, then free the tmp */
+    obj->handle = tmp->handle;
+    obj->cached = tmp->cached;
+    obj->cka_copyable = tmp->cka_copyable;
+    obj->cka_token = tmp->cka_token;
+    switch (obj->class) {
+    case CKO_CERTIFICATE:
+        obj->data.crt = tmp->data.crt;
+        break;
+    case CKO_PUBLIC_KEY:
+    case CKO_PRIVATE_KEY:
+        obj->data.key = tmp->data.key;
+        break;
+    default:
+        break;
+    }
+    /* FIXME: How do we refresh attrs? What happens if a pointer
+     * to an attr value was saved somewhere? Freeing ->attrs would
+     * cause use-after-free issues */
+    obj->raf = false;
 }
 
 #define SECRET_KEY_ATTRS 2
@@ -985,8 +1225,9 @@ CK_RV p11prov_obj_set_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
         }
     }
 
-    ret = p11prov_SetAttributeValue(ctx, p11prov_session_handle(s), obj->handle,
-                                    template, tsize);
+    ret =
+        p11prov_SetAttributeValue(ctx, p11prov_session_handle(s),
+                                  p11prov_obj_get_handle(obj), template, tsize);
 
     if (obj->cached != CK_INVALID_HANDLE) {
         /* try to re-cache key to maintain matching attributes */
@@ -1204,6 +1445,9 @@ static CK_RV get_public_attrs(P11PROV_OBJ *obj, CK_ATTRIBUTE *attrs, int num)
 {
     P11PROV_OBJ *tmp = NULL;
     CK_RV rv;
+
+    P11PROV_debug("Get Public Attributes (obj=%p, atrs=%p, num=%d)", obj, attrs,
+                  num);
 
     /* we couldn't get all of them, start fallback logic */
     switch (obj->class) {

@@ -20,6 +20,7 @@ static __forceinline int p11prov_rwlock_destroy(p11prov_rwlock_t *lock)
 #define p11prov_rwlock_rdunlock(lock)    0, ReleaseSRWLockShared(lock)
 #define p11prov_rwlock_wrlock(lock)      0, AcquireSRWLockExclusive(lock)
 #define p11prov_rwlock_wrunlock(lock)    0, ReleaseSRWLockExclusive(lock)
+#define PTHREAD_RWLOCK_INITIALIZER       SRWLOCK_INIT
 
 
 typedef CRITICAL_SECTION pthread_mutex_t;

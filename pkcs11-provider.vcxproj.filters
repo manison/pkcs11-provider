@@ -16,6 +16,7 @@
     <ClCompile Include="src\store.c" />
     <ClCompile Include="src\tls.c" />
     <ClCompile Include="src\util.c" />
+    <ClCompile Include="src\slot.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -45,6 +46,7 @@
     <ClInclude Include="src\platform\windows\win_dlfcn.h">
       <Filter>platform\windows</Filter>
     </ClInclude>
+    <ClInclude Include="src\slot.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">

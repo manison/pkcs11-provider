@@ -43,6 +43,7 @@
 #define P11PROV_PKCS11_MODULE_TOKEN_PIN "pkcs11-module-token-pin"
 #define P11PROV_PKCS11_MODULE_ALLOW_EXPORT "pkcs11-module-allow-export"
 #define P11PROV_PKCS11_MODULE_LOGIN_BEHAVIOR "pkcs11-module-login-behavior"
+#define P11PROV_PKCS11_MODULE_LOAD_BEHAVIOR "pkcs11-module-load-behavior"
 
 #define P11PROV_DEFAULT_PROPERTIES "provider=pkcs11"
 #define P11PROV_NAME_RSA "RSA"
@@ -84,6 +85,7 @@ typedef struct p11prov_slot P11PROV_SLOT;
 typedef struct p11prov_slots_ctx P11PROV_SLOTS_CTX;
 typedef struct p11prov_session P11PROV_SESSION;
 typedef struct p11prov_session_pool P11PROV_SESSION_POOL;
+typedef struct p11prov_obj_pool P11PROV_OBJ_POOL;
 
 #ifndef WIN32
 #include <pthread.h>
@@ -131,6 +133,10 @@ void p11prov_raise(P11PROV_CTX *ctx, const char *file, int line,
                       ##__VA_ARGS__); \
     } while (0)
 
+int p11prov_set_error_mark(P11PROV_CTX *ctx);
+int p11prov_clear_last_error_mark(P11PROV_CTX *ctx);
+int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
+
 /* dispatching */
 #define DECL_DISPATCH_FUNC(type, prefix, name) \
     static OSSL_FUNC_##type##_##name##_fn prefix##_##name
@@ -147,6 +153,7 @@ void p11prov_raise(P11PROV_CTX *ctx, const char *file, int line,
 #include "digests.h"
 #include "util.h"
 #include "session.h"
+#include "slot.h"
 
 /* TLS */
 int tls_group_capabilities(OSSL_CALLBACK *cb, void *arg);

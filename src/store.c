@@ -89,6 +89,7 @@ static void store_fetch(struct p11prov_store_ctx *ctx,
     bool login = false;
     CK_RV ret;
 
+    P11PROV_debug("called (store_ctx=%p)", ctx);
     login_behavior = p11prov_ctx_login_behavior(ctx->provctx);
 
     if (ctx->expect == 0 || ctx->expect == OSSL_STORE_INFO_PKEY
@@ -96,11 +97,18 @@ static void store_fetch(struct p11prov_store_ctx *ctx,
         login = true;
     }
 
+    /* error stack mark so we can unwind in case of repeat to avoid
+     * returning bogus errors */
+    p11prov_set_error_mark(ctx->provctx);
+
 again:
     /* cycle through all available slots,
      * only stack errors, but not block on any of them */
     do {
         nextid = CK_UNAVAILABLE_INFORMATION;
+
+        /* mark internal loops as well */
+        p11prov_set_error_mark(ctx->provctx);
 
         if (ctx->session != NULL) {
             p11prov_return_session(ctx->session);
@@ -111,15 +119,17 @@ again:
                                   ctx->parsed_uri, CK_UNAVAILABLE_INFORMATION,
                                   pw_cb, pw_cbarg, login, false, &ctx->session);
         if (ret != CKR_OK) {
-            P11PROV_raise(ctx->provctx, ret,
-                          "Failed to get session to load keys");
+            P11PROV_debug(
+                "Failed to get session to load keys (slotid=%lx, ret=%lx)",
+                slotid, ret);
 
             /* some cases may be recoverable in store_load if we get a pin
              * prompter, but if we already had one, this is it */
             if (pw_cb != NULL && ctx->loaded == 0) {
                 ctx->loaded = -1;
             }
-            return;
+            p11prov_pop_error_to_mark(ctx->provctx);
+            continue;
         }
 
         ret = p11prov_obj_find(ctx->provctx, ctx->session, slotid,
@@ -133,6 +143,9 @@ again:
         }
         slotid = nextid;
 
+        /* unset the mark, leaving errors on the stack */
+        p11prov_clear_last_error_mark(ctx->provctx);
+
     } while (nextid != CK_UNAVAILABLE_INFORMATION);
 
     /* Given the variety of tokens, if we found no object at all, and we did
@@ -140,10 +153,25 @@ again:
      * This accounts for HW that requires a login even for public objects */
     if (login == false && ctx->num_objs == 0
         && login_behavior != PUBKEY_LOGIN_NEVER) {
+        P11PROV_debug("No object found. Retrying with login (store_ctx=%p)",
+                      ctx);
         slotid = CK_UNAVAILABLE_INFORMATION;
         ctx->loaded = 0;
         login = true;
         goto again;
+    }
+
+    if (ctx->loaded == 0) {
+        /* if we get here it means we tried all */
+        ctx->loaded = -1;
+    }
+
+    if (ctx->num_objs > 0) {
+        /* if there was any error, remove it, as we got success */
+        p11prov_pop_error_to_mark(ctx->provctx);
+    } else {
+        /* otherwise clear the mark and leave errors on the stack */
+        p11prov_clear_last_error_mark(ctx->provctx);
     }
 }
 
