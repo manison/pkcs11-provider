@@ -38,13 +38,6 @@
 #define RET_OSSL_ERR 0
 #define RET_OSSL_BAD -1
 
-#define P11PROV_PKCS11_MODULE_PATH "pkcs11-module-path"
-#define P11PROV_PKCS11_MODULE_INIT_ARGS "pkcs11-module-init-args"
-#define P11PROV_PKCS11_MODULE_TOKEN_PIN "pkcs11-module-token-pin"
-#define P11PROV_PKCS11_MODULE_ALLOW_EXPORT "pkcs11-module-allow-export"
-#define P11PROV_PKCS11_MODULE_LOGIN_BEHAVIOR "pkcs11-module-login-behavior"
-#define P11PROV_PKCS11_MODULE_LOAD_BEHAVIOR "pkcs11-module-load-behavior"
-
 #define P11PROV_DEFAULT_PROPERTIES "provider=pkcs11"
 #define P11PROV_NAME_RSA "RSA"
 #define P11PROV_NAMES_RSA "RSA:rsaEncryption:1.2.840.113549.1.1.1"
@@ -118,6 +111,13 @@ int p11prov_ctx_allow_export(P11PROV_CTX *ctx);
 #define PUBKEY_LOGIN_ALWAYS 1
 #define PUBKEY_LOGIN_NEVER 2
 int p11prov_ctx_login_behavior(P11PROV_CTX *ctx);
+bool p11prov_ctx_cache_pins(P11PROV_CTX *ctx);
+
+enum p11prov_cache_keys {
+    P11PROV_CACHE_KEYS_NEVER = 0,
+    P11PROV_CACHE_KEYS_IN_SESSION,
+};
+int p11prov_ctx_cache_keys(P11PROV_CTX *ctx);
 
 #include "debug.h"
 

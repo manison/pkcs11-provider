@@ -13,6 +13,7 @@ struct p11prov_ctx {
         P11PROV_UNINITIALIZED = 0,
         P11PROV_INITIALIZED,
         P11PROV_NEEDS_REINIT,
+        P11PROV_NO_DEINIT,
         P11PROV_IN_ERROR,
     } status;
 
@@ -26,8 +27,13 @@ struct p11prov_ctx {
     char *pin;
     int allow_export;
     int login_behavior;
+    bool cache_pins;
+    int cache_keys;
     /* TODO: ui_method */
     /* TODO: fork id */
+
+    /* cfg quirks */
+    bool no_deinit;
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -388,6 +394,13 @@ failed:
 
 P11PROV_INTERFACE *p11prov_ctx_get_interface(P11PROV_CTX *ctx)
 {
+    if (ctx->status == P11PROV_NO_DEINIT) {
+        /* This is a quirk to handle modules that do funny things
+         * with openssl and have issues when called in the openssl
+         * destructors. Prevent any call to finalize or otherwise
+         * use the module. */
+        return NULL;
+    }
     return p11prov_module_get_interface(ctx->module);
 }
 
@@ -432,6 +445,7 @@ CK_RV p11prov_ctx_status(P11PROV_CTX *ctx)
         ctx->status = P11PROV_INITIALIZED;
         break;
     case P11PROV_INITIALIZED:
+    case P11PROV_NO_DEINIT:
         ret = CKR_OK;
         break;
     case P11PROV_NEEDS_REINIT:
@@ -468,6 +482,10 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
         P11PROV_raise(ctx, CKR_CANT_LOCK,
                       "Failure to wrlock! Data corruption may happen (%d)",
                       errno);
+    }
+
+    if (ctx->no_deinit) {
+        ctx->status = P11PROV_NO_DEINIT;
     }
 
     OPENSSL_free(ctx->op_digest);
@@ -532,6 +550,18 @@ int p11prov_ctx_login_behavior(P11PROV_CTX *ctx)
 {
     P11PROV_debug("login_behavior = %d", ctx->login_behavior);
     return ctx->login_behavior;
+}
+
+bool p11prov_ctx_cache_pins(P11PROV_CTX *ctx)
+{
+    P11PROV_debug("cache_pins = %s", ctx->cache_pins ? "true" : "false");
+    return ctx->cache_pins;
+}
+
+int p11prov_ctx_cache_keys(P11PROV_CTX *ctx)
+{
+    P11PROV_debug("cache_keys = %d", ctx->cache_keys);
+    return ctx->cache_keys;
 }
 
 static void p11prov_teardown(void *ctx)
@@ -1184,16 +1214,34 @@ static const OSSL_DISPATCH p11prov_dispatch_table[] = {
     { 0, NULL },
 };
 
+enum p11prov_cfg_enum {
+    P11PROV_CFG_PATH = 0,
+    P11PROV_CFG_INIT_ARGS,
+    P11PROV_CFG_TOKEN_PIN,
+    P11PROV_CFG_ALLOW_EXPORT,
+    P11PROV_CFG_LOGIN_BEHAVIOR,
+    P11PROV_CFG_LOAD_BEHAVIOR,
+    P11PROV_CFG_CACHE_PINS,
+    P11PROV_CFG_CACHE_KEYS,
+    P11PROV_CFG_QUIRKS,
+    P11PROV_CFG_SIZE,
+};
+
+static struct p11prov_cfg_names {
+    const char *name;
+} p11prov_cfg_names[P11PROV_CFG_SIZE] = {
+    { "pkcs11-module-path" },           { "pkcs11-module-init-args" },
+    { "pkcs11-module-token-pin" },      { "pkcs11-module-allow-export" },
+    { "pkcs11-module-login-behavior" }, { "pkcs11-module-load-behavior" },
+    { "pkcs11-module-cache-pins" },     { "pkcs11-module-cache-keys" },
+    { "pkcs11-module-quirks" },
+};
+
 int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
                        const OSSL_DISPATCH **out, void **provctx)
 {
-    OSSL_PARAM core_params[7] = { 0 };
-    const char *path = NULL;
-    const char *init_args = NULL;
-    char *allow_export = NULL;
-    char *login_behavior = NULL;
-    char *load = NULL;
-    char *pin = NULL;
+    const char *cfg[P11PROV_CFG_SIZE] = { 0 };
+    OSSL_PARAM core_params[P11PROV_CFG_SIZE + 1];
     P11PROV_CTX *ctx;
     int ret;
 
@@ -1221,23 +1269,12 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         return RET_OSSL_ERR;
     }
 
-    /* get module path */
-    core_params[0] = OSSL_PARAM_construct_utf8_ptr(
-        P11PROV_PKCS11_MODULE_PATH, (char **)&path, sizeof(path));
-    core_params[1] =
-        OSSL_PARAM_construct_utf8_ptr(P11PROV_PKCS11_MODULE_INIT_ARGS,
-                                      (char **)&init_args, sizeof(init_args));
-    core_params[2] = OSSL_PARAM_construct_utf8_ptr(
-        P11PROV_PKCS11_MODULE_TOKEN_PIN, &pin, sizeof(pin));
-    core_params[3] =
-        OSSL_PARAM_construct_utf8_ptr(P11PROV_PKCS11_MODULE_ALLOW_EXPORT,
-                                      &allow_export, sizeof(allow_export));
-    core_params[4] =
-        OSSL_PARAM_construct_utf8_ptr(P11PROV_PKCS11_MODULE_LOGIN_BEHAVIOR,
-                                      &login_behavior, sizeof(login_behavior));
-    core_params[5] = OSSL_PARAM_construct_utf8_ptr(
-        P11PROV_PKCS11_MODULE_LOAD_BEHAVIOR, &load, sizeof(load));
-    core_params[6] = OSSL_PARAM_construct_end();
+    for (int i = 0; i < P11PROV_CFG_SIZE; i++) {
+        core_params[i] = OSSL_PARAM_construct_utf8_ptr(
+            p11prov_cfg_names[i].name, (char **)&cfg[i], sizeof(void *));
+    }
+    core_params[P11PROV_CFG_SIZE] = OSSL_PARAM_construct_end();
+
     ret = core_get_params(handle, core_params);
     if (ret != RET_OSSL_OK) {
         ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
@@ -1245,15 +1282,16 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         return ret;
     }
 
-    ret = p11prov_module_new(ctx, path, init_args, &ctx->module);
+    ret = p11prov_module_new(ctx, cfg[P11PROV_CFG_PATH],
+                             cfg[P11PROV_CFG_INIT_ARGS], &ctx->module);
     if (ret != CKR_OK) {
         ERR_raise(ERR_LIB_PROV, PROV_R_IN_ERROR_STATE);
         p11prov_ctx_free(ctx);
         return RET_OSSL_ERR;
     }
 
-    if (pin != NULL) {
-        ret = p11prov_get_pin(pin, &ctx->pin);
+    if (cfg[P11PROV_CFG_TOKEN_PIN] != NULL) {
+        ret = p11prov_get_pin(cfg[P11PROV_CFG_TOKEN_PIN], &ctx->pin);
         if (ret != 0) {
             ERR_raise(ERR_LIB_PROV, PROV_R_IN_ERROR_STATE);
             p11prov_ctx_free(ctx);
@@ -1261,34 +1299,60 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         }
     }
 
-    if (allow_export != NULL) {
+    if (cfg[P11PROV_CFG_ALLOW_EXPORT] != NULL) {
         char *end = NULL;
         errno = 0;
-        ctx->allow_export = (int)strtol(allow_export, &end, 0);
+        ctx->allow_export = (int)strtol(cfg[P11PROV_CFG_ALLOW_EXPORT], &end, 0);
         if (errno != 0 || *end != '\0') {
             P11PROV_raise(ctx, CKR_GENERAL_ERROR, "Invalid value for %s: (%s)",
-                          P11PROV_PKCS11_MODULE_ALLOW_EXPORT, allow_export);
+                          p11prov_cfg_names[P11PROV_CFG_ALLOW_EXPORT].name,
+                          cfg[P11PROV_CFG_ALLOW_EXPORT]);
             p11prov_ctx_free(ctx);
             return RET_OSSL_ERR;
         }
     }
 
-    if (login_behavior != NULL) {
-        if (strcmp(login_behavior, "auto") == 0) {
+    if (cfg[P11PROV_CFG_LOGIN_BEHAVIOR] != NULL) {
+        if (strcmp(cfg[P11PROV_CFG_LOGIN_BEHAVIOR], "auto") == 0) {
             ctx->login_behavior = PUBKEY_LOGIN_AUTO;
-        } else if (strcmp(login_behavior, "always") == 0) {
+        } else if (strcmp(cfg[P11PROV_CFG_LOGIN_BEHAVIOR], "always") == 0) {
             ctx->login_behavior = PUBKEY_LOGIN_ALWAYS;
-        } else if (strcmp(login_behavior, "never") == 0) {
+        } else if (strcmp(cfg[P11PROV_CFG_LOGIN_BEHAVIOR], "never") == 0) {
             ctx->login_behavior = PUBKEY_LOGIN_NEVER;
         } else {
             P11PROV_raise(ctx, CKR_GENERAL_ERROR, "Invalid value for %s: (%s)",
-                          P11PROV_PKCS11_MODULE_LOGIN_BEHAVIOR, login_behavior);
+                          p11prov_cfg_names[P11PROV_CFG_LOGIN_BEHAVIOR].name,
+                          cfg[P11PROV_CFG_LOGIN_BEHAVIOR]);
             p11prov_ctx_free(ctx);
             return RET_OSSL_ERR;
         }
     }
 
-    if (load != NULL && strcmp(load, "early") == 0) {
+    if (cfg[P11PROV_CFG_CACHE_PINS] != NULL
+        && strcmp(cfg[P11PROV_CFG_CACHE_PINS], "cache") == 0) {
+        ctx->cache_pins = true;
+    }
+
+    if (cfg[P11PROV_CFG_CACHE_KEYS] != NULL) {
+        if (strcmp(cfg[P11PROV_CFG_CACHE_KEYS], "true") == 0) {
+            ctx->cache_keys = P11PROV_CACHE_KEYS_IN_SESSION;
+        } else if (strcmp(cfg[P11PROV_CFG_CACHE_KEYS], "false") == 0) {
+            ctx->cache_keys = P11PROV_CACHE_KEYS_NEVER;
+        }
+    } else {
+        /* defaults to session */
+        ctx->cache_keys = P11PROV_CACHE_KEYS_IN_SESSION;
+    }
+
+    if (cfg[P11PROV_CFG_QUIRKS] != NULL) {
+        if (strcmp(cfg[P11PROV_CFG_QUIRKS], "no-deinit") == 0) {
+            ctx->no_deinit = true;
+        }
+    }
+
+    /* PAY ATTENTION: do this as the last thing */
+    if (cfg[P11PROV_CFG_LOAD_BEHAVIOR] != NULL
+        && strcmp(cfg[P11PROV_CFG_LOAD_BEHAVIOR], "early") == 0) {
         /* this triggers early module loading */
         ret = p11prov_ctx_status(ctx);
         if (ret != CKR_OK) {

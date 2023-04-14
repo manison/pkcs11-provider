@@ -321,6 +321,7 @@ sed -e "s|@libtoollibs[@]|${LIBSPATH}|g" \
     -e "s|@testsblddir@|${TESTBLDDIR}|g" \
     -e "s|@testsdir[@]|${BASEDIR}/${TMPPDIR}|g" \
     -e "s|@SHARED_EXT@|${SHARED_EXT}|g" \
+    -e "s|##QUIRKS|pkcs11-module-quirks = no-deinit|g" \
     -e "/pkcs11-module-init-args/d" \
     ${TESTSSRCDIR}/openssl.cnf.in > ${OPENSSL_CONF}
 
@@ -333,6 +334,7 @@ export PKCS11_PROVIDER_DEBUG="file:${BASEDIR}/${TMPPDIR}/p11prov-debug.log"
 export OPENSSL_CONF="${OPENSSL_CONF}"
 export SOFTHSM2_CONF=${BASEDIR}/${TMPPDIR}/softhsm.conf
 export TESTSSRCDIR="${TESTSSRCDIR}"
+export TESTBLDDIR="${TESTBLDDIR}"
 
 export TOKDIR="${BASEDIR}/${TOKDIR}"
 export TMPPDIR="${BASEDIR}/${TMPPDIR}"

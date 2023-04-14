@@ -5,6 +5,8 @@
 #include "platform/endian.h"
 #include <string.h>
 
+#define DFLT_DIGEST "SHA256"
+
 DISPATCH_KEYMGMT_FN(common, gen_set_params);
 DISPATCH_KEYMGMT_FN(common, gen_cleanup);
 
@@ -588,6 +590,7 @@ static int p11prov_rsa_export(void *keydata, int selection,
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
+    CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
 
     P11PROV_debug("rsa export %p", keydata);
 
@@ -600,7 +603,7 @@ static int p11prov_rsa_export(void *keydata, int selection,
     }
 
     /* if anything else is asked for we can't provide it, so be strict */
-    if ((selection & ~(PUBLIC_PARAMS)) == 0) {
+    if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
         return p11prov_obj_export_public_rsa_key(key, cb_fn, cb_arg);
     }
 
@@ -716,6 +719,13 @@ static int p11prov_rsa_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_DEFAULT_DIGEST);
+    if (p) {
+        ret = OSSL_PARAM_set_utf8_string(p, DFLT_DIGEST);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -726,9 +736,11 @@ static const OSSL_PARAM *p11prov_rsa_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
-        /* OSSL_PKEY_PARAM_DEFAULT_DIGEST,
-         * OSSL_PKEY_PARAM_RSA_N,
+        OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+        /* OSSL_PKEY_PARAM_RSA_N,
          * OSSL_PKEY_PARAM_RSA_E, */
+        /* PKCS#11 does not have restrictions associated to keys so
+         * we can't support OSSL_PKEY_PARAM_MANDATORY_DIGEST yet */
         OSSL_PARAM_END,
     };
     return params;
@@ -1015,6 +1027,7 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
+    CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
 
     P11PROV_debug("ec export %p", keydata);
 
@@ -1027,7 +1040,7 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
     }
 
     /* this will return the public EC_POINT as well as DOMAIN_PARAMTERS */
-    if ((selection & ~(PUBLIC_PARAMS)) == 0) {
+    if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
         return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
     }
 
@@ -1139,6 +1152,13 @@ static int p11prov_ec_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_DEFAULT_DIGEST);
+    if (p) {
+        ret = OSSL_PARAM_set_utf8_string(p, DFLT_DIGEST);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -1150,7 +1170,8 @@ static const OSSL_PARAM *p11prov_ec_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
-        /* OSSL_PKEY_PARAM_DEFAULT_DIGEST
+        OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+        /*
          * OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY
          * OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAM
          * OSSL_PKEY_PARAM_EC_ENCODING
@@ -1279,6 +1300,7 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
+    CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
 
     P11PROV_debug("ed export %p", keydata);
 
@@ -1291,7 +1313,7 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
     }
 
     /* this will return the public EC_POINT */
-    if ((selection & ~(PUBLIC_PARAMS)) == 0) {
+    if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
         return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
     }
 
@@ -1396,6 +1418,13 @@ static int p11prov_ed_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_MANDATORY_DIGEST);
+    if (p) {
+        ret = OSSL_PARAM_set_utf8_string(p, "");
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -1407,6 +1436,7 @@ static const OSSL_PARAM *p11prov_ed_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
+        OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_MANDATORY_DIGEST, NULL, 0),
         OSSL_PARAM_END,
     };
     return params;
