@@ -17,6 +17,7 @@
     <ClCompile Include="src\tls.c" />
     <ClCompile Include="src\util.c" />
     <ClCompile Include="src\slot.c" />
+    <ClCompile Include="src\random.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -47,6 +48,7 @@
       <Filter>platform\windows</Filter>
     </ClInclude>
     <ClInclude Include="src\slot.h" />
+    <ClInclude Include="src\random.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">

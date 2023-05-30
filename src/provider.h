@@ -62,6 +62,8 @@
 #define P11PROV_NAMES_ED448 "ED448:1.3.101.113"
 #define P11PROV_NAME_ED448 "ED448"
 #define P11PROV_DESCS_ED448 "PKCS11 ED448 Implementation"
+#define P11PROV_NAMES_RAND "PKCS11-RAND"
+#define P11PROV_DESCS_RAND "PKCS11 Random Generator"
 
 #define P11PROV_PARAM_KEY_LABEL "pkcs11_key_label"
 #define P11PROV_PARAM_KEY_ID "pkcs11_key_id"
@@ -100,6 +102,10 @@ CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
                             void **data, CK_ULONG *size);
 CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
                             void *data, CK_ULONG size);
+#define GET_ATTR 0
+#define SET_ATTR 1
+CK_RV p11prov_token_sup_attr(P11PROV_CTX *ctx, CK_SLOT_ID id, int action,
+                             CK_ATTRIBUTE_TYPE attr, CK_BBOOL *data);
 
 #define ALLOW_EXPORT_PUBLIC 0
 #define DISALLOW_EXPORT_PUBLIC 1
@@ -116,6 +122,7 @@ enum p11prov_cache_keys {
     P11PROV_CACHE_KEYS_IN_SESSION,
 };
 int p11prov_ctx_cache_keys(P11PROV_CTX *ctx);
+int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx);
 
 #include "debug.h"
 
@@ -152,6 +159,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 #include "util.h"
 #include "session.h"
 #include "slot.h"
+#include "random.h"
 
 /* TLS */
 int tls_group_capabilities(OSSL_CALLBACK *cb, void *arg);

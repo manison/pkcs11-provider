@@ -433,8 +433,7 @@ static int parse_version(P11PROV_CTX *ctx, const char *str, size_t len,
 {
     CK_VERSION *ver = (CK_VERSION *)output;
     const char *sep;
-    char *endptr;
-    long val;
+    CK_ULONG val;
     int ret;
 
     if (len < 3 || len > 7) {
@@ -448,36 +447,23 @@ static int parse_version(P11PROV_CTX *ctx, const char *str, size_t len,
     }
 
     /* major */
-    errno = 0;
-    endptr = NULL;
-    val = strtol(str, &endptr, 10);
-    if (errno != 0) {
-        ret = errno;
+    ret = parse_ulong(ctx, str, (sep - str), (void **)&val);
+    if (ret != 0) {
         goto done;
     }
-    if (endptr != sep) {
-        ret = EINVAL;
-        goto done;
-    }
-    if (val < 0 || val > 255) {
+    if (val > 255) {
         ret = EINVAL;
         goto done;
     }
     ver->major = val;
 
     /* minor */
-    errno = 0;
-    endptr = NULL;
-    val = strtol(sep + 1, &endptr, 10);
-    if (errno != 0) {
-        ret = errno;
+    sep++;
+    ret = parse_ulong(ctx, sep, len - (sep - str), (void **)&val);
+    if (ret != 0) {
         goto done;
     }
-    if (endptr != str + len) {
-        ret = EINVAL;
-        goto done;
-    }
-    if (val < 0 || val > 255) {
+    if (val > 255) {
         ret = EINVAL;
         goto done;
     }
@@ -493,8 +479,7 @@ done:
     return ret;
 }
 
-static int parse_ulong(P11PROV_CTX *ctx, const char *str, size_t len,
-                       void **output)
+int parse_ulong(P11PROV_CTX *ctx, const char *str, size_t len, void **output)
 {
     CK_ULONG *val = (CK_ULONG *)output;
     char *endptr;
@@ -963,37 +948,6 @@ void byteswap_buf(unsigned char *src, unsigned char *dest, size_t len)
 #else
     memmove(dest, src, len);
 #endif
-}
-
-CK_RV p11prov_token_sup_attr(P11PROV_CTX *ctx, CK_SLOT_ID id, int action,
-                             CK_ATTRIBUTE_TYPE attr, CK_BBOOL *data)
-{
-    CK_ULONG data_size = sizeof(CK_BBOOL);
-    void *data_ptr = &data;
-    char alloc_name[32];
-    const char *name;
-    int err;
-
-    switch (attr) {
-    case CKA_ALLOWED_MECHANISMS:
-        name = "sup_attr_CKA_ALLOWED_MECHANISMS";
-        break;
-    default:
-        err = snprintf(alloc_name, 32, "sup_attr_%016lx", attr);
-        if (err < 0 || err >= 32) {
-            return CKR_HOST_MEMORY;
-        }
-        name = alloc_name;
-    }
-
-    switch (action) {
-    case GET_ATTR:
-        return p11prov_ctx_get_quirk(ctx, id, name, data_ptr, &data_size);
-    case SET_ATTR:
-        return p11prov_ctx_set_quirk(ctx, id, name, data, data_size);
-    default:
-        return CKR_ARGUMENTS_BAD;
-    }
 }
 
 CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src)

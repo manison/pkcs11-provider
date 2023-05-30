@@ -52,6 +52,7 @@ void p11prov_move_alloc_attrs(struct fetch_attrs *attrs, int num,
 void p11prov_fetch_attrs_free(struct fetch_attrs *attrs, int num);
 
 #define MAX_PIN_LENGTH 32
+int parse_ulong(P11PROV_CTX *ctx, const char *str, size_t len, void **output);
 P11PROV_URI *p11prov_parse_uri(P11PROV_CTX *ctx, const char *uri);
 char *p11prov_key_to_uri(P11PROV_CTX *ctx, P11PROV_OBJ *key);
 void p11prov_uri_free(P11PROV_URI *parsed_uri);
@@ -65,10 +66,6 @@ CK_RV p11prov_uri_match_token(P11PROV_URI *uri, CK_SLOT_ID slot_id,
 int p11prov_get_pin(P11PROV_CTX *ctx, const char *in, char **out);
 bool cyclewait_with_timeout(uint64_t max_wait, uint64_t interval,
                             uint64_t *start_time);
-#define GET_ATTR 0
-#define SET_ATTR 1
-CK_RV p11prov_token_sup_attr(P11PROV_CTX *ctx, CK_SLOT_ID id, int action,
-                             CK_ATTRIBUTE_TYPE attr, CK_BBOOL *data);
 CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src);
 bool p11prov_x509_names_are_equal(CK_ATTRIBUTE *a, CK_ATTRIBUTE *b);
 char *p11prov_alloc_sprintf(int size_hint, const char *format, ...);

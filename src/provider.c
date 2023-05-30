@@ -29,11 +29,13 @@ struct p11prov_ctx {
     int login_behavior;
     bool cache_pins;
     int cache_keys;
+    int cache_sessions;
     /* TODO: ui_method */
     /* TODO: fork id */
 
     /* cfg quirks */
     bool no_deinit;
+    bool no_allowed_mechanisms;
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -42,6 +44,7 @@ struct p11prov_ctx {
 
     OSSL_ALGORITHM *op_digest;
     OSSL_ALGORITHM *op_kdf;
+    OSSL_ALGORITHM *op_random;
     OSSL_ALGORITHM *op_exchange;
     OSSL_ALGORITHM *op_signature;
     OSSL_ALGORITHM *op_asym_cipher;
@@ -392,6 +395,43 @@ failed:
     return ret;
 }
 
+CK_RV p11prov_token_sup_attr(P11PROV_CTX *ctx, CK_SLOT_ID id, int action,
+                             CK_ATTRIBUTE_TYPE attr, CK_BBOOL *data)
+{
+    CK_ULONG data_size = sizeof(CK_BBOOL);
+    void *data_ptr = &data;
+    char alloc_name[32];
+    const char *name;
+    int err;
+
+    switch (attr) {
+    case CKA_ALLOWED_MECHANISMS:
+        if (ctx->no_allowed_mechanisms) {
+            if (action == GET_ATTR) {
+                *data = false;
+            }
+            return CKR_OK;
+        }
+        name = "sup_attr_CKA_ALLOWED_MECHANISMS";
+        break;
+    default:
+        err = snprintf(alloc_name, 32, "sup_attr_%016lx", attr);
+        if (err < 0 || err >= 32) {
+            return CKR_HOST_MEMORY;
+        }
+        name = alloc_name;
+    }
+
+    switch (action) {
+    case GET_ATTR:
+        return p11prov_ctx_get_quirk(ctx, id, name, data_ptr, &data_size);
+    case SET_ATTR:
+        return p11prov_ctx_set_quirk(ctx, id, name, data, data_size);
+    default:
+        return CKR_ARGUMENTS_BAD;
+    }
+}
+
 P11PROV_INTERFACE *p11prov_ctx_get_interface(P11PROV_CTX *ctx)
 {
     if (ctx->status == P11PROV_NO_DEINIT) {
@@ -490,6 +530,7 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
 
     OPENSSL_free(ctx->op_digest);
     OPENSSL_free(ctx->op_kdf);
+    OPENSSL_free(ctx->op_random);
     /* keymgmt is static */
     OPENSSL_free(ctx->op_exchange);
     OPENSSL_free(ctx->op_signature);
@@ -562,6 +603,12 @@ int p11prov_ctx_cache_keys(P11PROV_CTX *ctx)
 {
     P11PROV_debug("cache_keys = %d", ctx->cache_keys);
     return ctx->cache_keys;
+}
+
+int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx)
+{
+    P11PROV_debug("cache_sessions = %d", ctx->cache_sessions);
+    return ctx->cache_sessions;
 }
 
 static void p11prov_teardown(void *ctx)
@@ -817,6 +864,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
     int cl_size = sizeof(checklist) / sizeof(CK_ULONG);
     int digest_idx = 0;
     int kdf_idx = 0;
+    int random_idx = 0;
     int exchange_idx = 0;
     int signature_idx = 0;
     int asym_cipher_idx = 0;
@@ -1016,6 +1064,13 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                  p11prov_ec_encoder_spki_der_functions);
     TERM_ALGO(encoder);
 
+    /* handle random */
+    ret = p11prov_check_random(ctx);
+    if (ret == CKR_OK) {
+        ADD_ALGO_EXT(RAND, random, "provider=pkcs11", p11prov_rand_functions);
+        TERM_ALGO(random);
+    }
+
     return CKR_OK;
 }
 
@@ -1055,6 +1110,8 @@ p11prov_query_operation(void *provctx, int operation_id, int *no_cache)
         return ctx->op_digest;
     case OSSL_OP_KDF:
         return ctx->op_kdf;
+    case OSSL_OP_RAND:
+        return ctx->op_random;
     case OSSL_OP_KEYMGMT:
         return p11prov_keymgmt;
     case OSSL_OP_KEYEXCH:
@@ -1224,6 +1281,7 @@ enum p11prov_cfg_enum {
     P11PROV_CFG_CACHE_PINS,
     P11PROV_CFG_CACHE_KEYS,
     P11PROV_CFG_QUIRKS,
+    P11PROV_CFG_CACHE_SESSIONS,
     P11PROV_CFG_SIZE,
 };
 
@@ -1234,7 +1292,7 @@ static struct p11prov_cfg_names {
     { "pkcs11-module-token-pin" },      { "pkcs11-module-allow-export" },
     { "pkcs11-module-login-behavior" }, { "pkcs11-module-load-behavior" },
     { "pkcs11-module-cache-pins" },     { "pkcs11-module-cache-keys" },
-    { "pkcs11-module-quirks" },
+    { "pkcs11-module-quirks" },         { "pkcs11-module-cache-sessions" },
 };
 
 int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
@@ -1282,6 +1340,19 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         return ret;
     }
 
+    P11PROV_debug("Provided config params:");
+    for (int i = 0; i < P11PROV_CFG_SIZE; i++) {
+        const char none[] = "[none]";
+        const char pin[] = "[****]";
+        const char *val = none;
+        if (i == P11PROV_CFG_TOKEN_PIN) {
+            val = pin;
+        } else if (cfg[i]) {
+            val = cfg[i];
+        }
+        P11PROV_debug("  %s: %s", p11prov_cfg_names[i].name, val);
+    }
+
     ret = p11prov_module_new(ctx, cfg[P11PROV_CFG_PATH],
                              cfg[P11PROV_CFG_INIT_ARGS], &ctx->module);
     if (ret != CKR_OK) {
@@ -1298,6 +1369,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             return RET_OSSL_ERR;
         }
     }
+    P11PROV_debug("PIN %savailable", ctx->pin ? "" : "not ");
 
     if (cfg[P11PROV_CFG_ALLOW_EXPORT] != NULL) {
         char *end = NULL;
@@ -1311,6 +1383,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             return RET_OSSL_ERR;
         }
     }
+    P11PROV_debug("Export %sallowed", ctx->allow_export == 1 ? "not " : "");
 
     if (cfg[P11PROV_CFG_LOGIN_BEHAVIOR] != NULL) {
         if (strcmp(cfg[P11PROV_CFG_LOGIN_BEHAVIOR], "auto") == 0) {
@@ -1327,11 +1400,26 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             return RET_OSSL_ERR;
         }
     }
+    switch (ctx->login_behavior) {
+    case PUBKEY_LOGIN_AUTO:
+        P11PROV_debug("Login behavior: auto");
+        break;
+    case PUBKEY_LOGIN_ALWAYS:
+        P11PROV_debug("Login behavior: always");
+        break;
+    case PUBKEY_LOGIN_NEVER:
+        P11PROV_debug("Login behavior: never");
+        break;
+    default:
+        P11PROV_debug("Login behavior: <invalid>");
+        break;
+    }
 
     if (cfg[P11PROV_CFG_CACHE_PINS] != NULL
         && strcmp(cfg[P11PROV_CFG_CACHE_PINS], "cache") == 0) {
         ctx->cache_pins = true;
     }
+    P11PROV_debug("PINs will %sbe cached", ctx->cache_pins ? "" : "not ");
 
     if (cfg[P11PROV_CFG_CACHE_KEYS] != NULL) {
         if (strcmp(cfg[P11PROV_CFG_CACHE_KEYS], "true") == 0) {
@@ -1343,12 +1431,72 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         /* defaults to session */
         ctx->cache_keys = P11PROV_CACHE_KEYS_IN_SESSION;
     }
+    switch (ctx->cache_keys) {
+    case P11PROV_CACHE_KEYS_NEVER:
+        P11PROV_debug("Key caching: never");
+        break;
+    case P11PROV_CACHE_KEYS_IN_SESSION:
+        P11PROV_debug("Key caching: in session object");
+        break;
+    }
 
     if (cfg[P11PROV_CFG_QUIRKS] != NULL) {
-        if (strcmp(cfg[P11PROV_CFG_QUIRKS], "no-deinit") == 0) {
-            ctx->no_deinit = true;
+        const char *str;
+        const char *sep;
+        size_t len = strlen(cfg[P11PROV_CFG_QUIRKS]);
+        size_t toklen;
+
+        str = cfg[P11PROV_CFG_QUIRKS];
+        while (str) {
+            sep = strchr(str, ' ');
+            if (sep) {
+                toklen = sep - str;
+            } else {
+                toklen = len;
+            }
+            if (strncmp(str, "no-deinit", toklen) == 0) {
+                ctx->no_deinit = true;
+            } else if (strncmp(str, "no-allowed-mechanisms", toklen) == 0) {
+                ctx->no_allowed_mechanisms = true;
+            }
+            len -= toklen;
+            if (sep) {
+                str = sep + 1;
+                len--;
+            } else {
+                str = NULL;
+            }
         }
     }
+    if (ctx->no_deinit || ctx->no_allowed_mechanisms) {
+        P11PROV_debug("Quirks:");
+        if (ctx->no_deinit) {
+            P11PROV_debug(" No finalization on de-initialization");
+        }
+        if (ctx->no_allowed_mechanisms) {
+            P11PROV_debug(" No CKA_ALLOWED_MECHANISM use");
+        }
+    } else {
+        P11PROV_debug("No quirks");
+    }
+
+    if (cfg[P11PROV_CFG_CACHE_SESSIONS] != NULL) {
+        CK_ULONG val;
+        ret =
+            parse_ulong(ctx, cfg[P11PROV_CFG_CACHE_SESSIONS],
+                        strlen(cfg[P11PROV_CFG_CACHE_SESSIONS]), (void **)&val);
+        if (ret != 0 || val > MAX_CONCURRENT_SESSIONS) {
+            P11PROV_raise(ctx, CKR_GENERAL_ERROR, "Invalid value for %s: (%s)",
+                          p11prov_cfg_names[P11PROV_CFG_CACHE_SESSIONS].name,
+                          cfg[P11PROV_CFG_CACHE_SESSIONS]);
+            p11prov_ctx_free(ctx);
+            return RET_OSSL_ERR;
+        }
+        ctx->cache_sessions = val;
+    } else {
+        ctx->cache_sessions = MAX_CACHE_SESSIONS;
+    }
+    P11PROV_debug("Cache Sessions: %lu", ctx->cache_sessions);
 
     /* PAY ATTENTION: do this as the last thing */
     if (cfg[P11PROV_CFG_LOAD_BEHAVIOR] != NULL
@@ -1360,6 +1508,8 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             return RET_OSSL_ERR;
         }
     }
+    P11PROV_debug("Load behavior: %s",
+                  ctx->status == P11PROV_UNINITIALIZED ? "default" : "early");
 
     /* done */
     ret = RET_OSSL_OK;
