@@ -1,8 +1,13 @@
-EXTRA_DIST = openssl.cnf.in
+EXTRA_DIST = openssl.cnf.in \
+	lsan.supp
 
 libspath=@abs_top_builddir@/src/.libs
 testsblddir=@abs_top_builddir@/tests
 testssrcdir=@abs_srcdir@
+
+@VALGRIND_CHECK_RULES@
+#VALGRIND_SUPPRESSIONS_FILES = $(top_srcdir)/tests/pkcs11-provider.supp
+VALGRIND_FLAGS = --num-callers=30 -q --keep-debuginfo=yes
 
 check_PROGRAMS = tsession tgenkey tlsctx tdigests treadkeys tfork pincache
 
@@ -55,34 +60,53 @@ dist_check_SCRIPTS = \
 	toaepsha2 trsapss tdigest ttls tpubkey tfork turi trand
 
 test_LIST = \
-	basic-softokn basic-softhsm \
-	pubkey-softokn pubkey-softhsm \
-	certs-softokn certs-softhsm \
-	ecc-softokn ecc-softhsm \
-	edwards-softhsm \
-	ecdh-softokn \
-	democa-softokn democa-softhsm \
-	digest-softokn digest-softhsm \
-	fork-softokn fork-softhsm \
-	oaepsha2-softokn \
-	hkdf-softokn \
-	rsapss-softokn \
-	genkey-softokn genkey-softhsm \
-	session-softokn session-softhsm \
-	rand-softokn rand-softhsm \
-	readkeys-softokn readkeys-softhsm \
-	tls-softokn tls-softhsm \
-	uri-softokn uri-softhsm
+	basic-softokn.t basic-softhsm.t \
+	pubkey-softokn.t pubkey-softhsm.t \
+	certs-softokn.t certs-softhsm.t \
+	ecc-softokn.t ecc-softhsm.t \
+	edwards-softhsm.t \
+	ecdh-softokn.t \
+	democa-softokn.t democa-softhsm.t \
+	digest-softokn.t digest-softhsm.t \
+	fork-softokn.t fork-softhsm.t \
+	oaepsha2-softokn.t \
+	hkdf-softokn.t \
+	rsapss-softokn.t \
+	genkey-softokn.t genkey-softhsm.t \
+	session-softokn.t session-softhsm.t \
+	rand-softokn.t rand-softhsm.t \
+	readkeys-softokn.t readkeys-softhsm.t \
+	tls-softokn.t tls-softhsm.t \
+	uri-softokn.t uri-softhsm.t
 
 .PHONY: $(test_LIST)
 
 TESTS = $(test_LIST)
 
-$(TESTS): tmp.softokn tmp.softhsm
+AM_TESTS_ENVIRONMENT =     \
+	export LC_ALL='C';
 
-TESTS_ENVIRONMENT =     \
-	LC_ALL="C"
-LOG_COMPILER = $(testssrcdir)/test-wrapper
+TEST_EXTENSIONS = .t
+T_LOG_COMPILER = $(testssrcdir)/test-wrapper
+
+if ADDRESS_SANITIZER
+# Avoids closing dlopened libraries for ASan to be able to print usable traces
+FAKE_DLCLOSE=.libs/fake_dlclose.so
+lib_LTLIBRARIES = fake_dlclose.la
+fake_dlclose_la_SOURCES = fake_dlclose.c
+fake_dlclose_la_CFLAGS = $(AM_CFLAGS) -Wall -Werror
+fake_dlclose_la_LDFLAGS = $(AM_LDFLAGS) -module -shared -avoid-version
+
+# LD_PRELOAD is needed before invoking openssl as it is not instrumented with
+# asan and asan needs to be loaded as a firs dynamic library of the process.
+AM_TESTS_ENVIRONMENT += \
+	export ASAN_OPTIONS='fast_unwind_on_malloc=0'; \
+	export LSAN_OPTIONS='suppressions=$(testssrcdir)/lsan.supp'; \
+	export DLCLOSE='$(testsblddir)/$(FAKE_DLCLOSE)'; \
+	export CHECKER='env LD_PRELOAD=$(ADDRESS_SANITIZER_PATH):$(testsblddir)/$(FAKE_DLCLOSE)';
+endif
+
+$(TESTS): tmp.softokn tmp.softhsm $(FAKE_DLCLOSE)
 
 CLEANFILES = \
 	setup-*.log \

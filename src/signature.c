@@ -1212,6 +1212,9 @@ static int p11prov_rsasig_digest_sign_final(void *ctx, unsigned char *sig,
 {
     P11PROV_SIG_CTX *sigctx = (P11PROV_SIG_CTX *)ctx;
 
+    /* the siglen might be uninitialized when called from openssl */
+    *siglen = 0;
+
     P11PROV_debug(
         "rsa digest sign final (ctx=%p, sig=%p, siglen=%zu, "
         "sigsize=%zu)",
@@ -1852,6 +1855,9 @@ static int p11prov_ecdsa_digest_sign_final(void *ctx, unsigned char *sig,
     unsigned char raw[P11PROV_MAX_RAW_ECC_SIG_SIZE];
     size_t rawlen;
     int ret;
+
+    /* the siglen might be uninitialized when called from openssl */
+    *siglen = 0;
 
     P11PROV_debug(
         "ecdsa digest sign final (ctx=%p, sig=%p, siglen=%zu, "

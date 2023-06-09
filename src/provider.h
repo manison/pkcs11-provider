@@ -91,6 +91,15 @@ typedef pthread_rwlock_t p11prov_rwlock_t;
 #define p11prov_rwlock_wrunlock(l)  pthread_rwlock_unlock(l)
 #endif
 
+#if __SANITIZE_ADDRESS__
+#define P11PROV_ADDRESS_SANITIZER 1
+#endif
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define P11PROV_ADDRESS_SANITIZER 1
+#endif
+#endif
+
 /* Provider ctx */
 P11PROV_INTERFACE *p11prov_ctx_get_interface(P11PROV_CTX *ctx);
 CK_UTF8CHAR_PTR p11prov_ctx_pin(P11PROV_CTX *ctx);

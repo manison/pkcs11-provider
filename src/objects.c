@@ -520,10 +520,15 @@ CK_ULONG p11prov_obj_get_key_size(P11PROV_OBJ *obj)
     return CK_UNAVAILABLE_INFORMATION;
 }
 
-void p11prov_obj_to_reference(P11PROV_OBJ *obj, void **reference,
-                              size_t *reference_sz)
+void p11prov_obj_to_store_reference(P11PROV_OBJ *obj, void **reference,
+                                    size_t *reference_sz)
 {
-    *reference = p11prov_obj_ref_no_cache(obj);
+    /* The store context keeps reference to this object so we will not free
+     * it while the store context is alive. When the applications wants to
+     * reference the object, it will get its own reference through
+     * p11prov_common_load(). After closing the store, the user should
+     * not be able to use this reference anymore. */
+    *reference = obj;
     *reference_sz = sizeof(P11PROV_OBJ);
 }
 
@@ -853,7 +858,7 @@ CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
             return CKR_ARGUMENTS_BAD;
         }
 
-        /* do this at the end as it often won't be a supported attributed */
+        /* do this at the end as it often won't be a supported attribute */
         ret = p11prov_token_sup_attr(ctx, obj->slotid, GET_ATTR,
                                      CKA_ALLOWED_MECHANISMS,
                                      &token_supports_allowed_mechs);
@@ -1091,6 +1096,7 @@ static void p11prov_obj_refresh(P11PROV_OBJ *obj)
     /* FIXME: How do we refresh attrs? What happens if a pointer
      * to an attr value was saved somewhere? Freeing ->attrs would
      * cause use-after-free issues */
+    p11prov_obj_free(tmp);
     obj->raf = false;
 }
 
@@ -1363,7 +1369,9 @@ static CK_RV get_all_from_cert(P11PROV_OBJ *crt, CK_ATTRIBUTE *attrs, int num)
             rv = CKR_GENERAL_ERROR;
             goto done;
         }
-        params[i].data = OPENSSL_zalloc(params[i].return_size);
+        /* allocate one more byte as null terminator to avoid buffer overruns
+         * when this is converted to the OSSL_PARAM as utf8 string */
+        params[i].data = OPENSSL_zalloc(params[i].return_size + 1);
         if (!params[i].data) {
             rv = CKR_HOST_MEMORY;
             goto done;

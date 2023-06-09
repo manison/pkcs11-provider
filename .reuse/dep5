@@ -22,6 +22,8 @@ Files: **/Makefile.am
        .clang-format
        .clang-format-ignore
        packaging/pkcs11-provider.spec
+       docs/*
+       tests/lsan.supp
 Copyright: (C) 2022 Simo Sorce <simo@redhat.com>
 License: Apache-2.0
 
