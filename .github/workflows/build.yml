@@ -3,7 +3,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "test/**"]
   pull_request:
     branches: ["main"]
 
@@ -57,7 +57,7 @@ jobs:
       - name: Build and Test
         run: make check
       - uses: actions/upload-artifact@v3
-        if: failure()
+        #if: failure()
         with:
           name: Test logs ${{ matrix.name }}, ${{ matrix.compiler }}, ${{ matrix.token }}
           path: |
