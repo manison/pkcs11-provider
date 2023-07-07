@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([pkcs11-provider], [0.1], [simo@redhat.com])
+AC_INIT([pkcs11-provider], [0.2], [simo@redhat.com])
 AC_CONFIG_SRCDIR([src/provider.c])
 AC_CONFIG_HEADERS([src/config.h])
 AM_INIT_AUTOMAKE([foreign dist-xz -Wall -Werror])
@@ -60,11 +60,18 @@ AC_ARG_WITH([openssl],
       CFLAGS="-I$OPENSSL_DIR/include $CFLAGS"
       LDFLAGS="-L${libcrypto_path} ${LDFLAGS}"
       LIBS="$LIBS -L${libcrypto_path}"
+      CRYPTO_LIBS="-lcrypto"
       OPENSSL_LIBS="-lcrypto -lssl"
       AC_MSG_WARN([Custom openssl located in $OPENSSL_DIR is used, lib version check is skipped])
   ],
   [
       # Checks for libraries.
+      PKG_CHECK_MODULES(
+        [CRYPTO],
+        [libcrypto >= 3.0.7],
+        ,
+        [AC_MSG_ERROR([libcrypto >= 3.0.7 is required])]
+      )
       PKG_CHECK_MODULES(
         [OPENSSL],
         [libcrypto >= 3.0.7, libssl],
