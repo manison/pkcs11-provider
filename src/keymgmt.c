@@ -17,6 +17,7 @@ DISPATCH_KEYMGMT_FN(rsa, gen_settable_params);
 DISPATCH_KEYMGMT_FN(rsa, load);
 DISPATCH_KEYMGMT_FN(rsa, free);
 DISPATCH_KEYMGMT_FN(rsa, has);
+DISPATCH_KEYMGMT_FN(rsa, match);
 DISPATCH_KEYMGMT_FN(rsa, import);
 DISPATCH_KEYMGMT_FN(rsa, import_types);
 DISPATCH_KEYMGMT_FN(rsa, export);
@@ -461,6 +462,27 @@ static void *p11prov_common_load(const void *reference, size_t reference_sz,
     return key;
 }
 
+static int p11prov_common_match(const void *keydata1, const void *keydata2,
+                                CK_KEY_TYPE type, int selection)
+{
+    P11PROV_OBJ *key1 = (P11PROV_OBJ *)keydata1;
+    P11PROV_OBJ *key2 = (P11PROV_OBJ *)keydata2;
+    int cmp_type = OBJ_CMP_KEY_TYPE;
+
+    if (key1 == key2) {
+        return RET_OSSL_OK;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        cmp_type |= OBJ_CMP_KEY_PUBLIC;
+    }
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        cmp_type |= OBJ_CMP_KEY_PRIVATE;
+    }
+
+    return p11prov_obj_key_cmp(key1, key2, type, cmp_type);
+}
+
 /* RSA gen key */
 static void *p11prov_rsa_gen_init(void *provctx, int selection,
                                   const OSSL_PARAM params[])
@@ -575,11 +597,49 @@ static int p11prov_rsa_has(const void *keydata, int selection)
     return RET_OSSL_OK;
 }
 
+static int p11prov_rsa_match(const void *keydata1, const void *keydata2,
+                             int selection)
+{
+    P11PROV_debug("rsa match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_RSA, selection);
+}
+
 static int p11prov_rsa_import(void *keydata, int selection,
                               const OSSL_PARAM params[])
 {
-    P11PROV_debug("rsa import %p", keydata);
-    return RET_OSSL_ERR;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    CK_OBJECT_CLASS class = CKO_PUBLIC_KEY;
+    CK_RV rv;
+
+    P11PROV_debug("rsa import %p", key);
+
+    if (!key) {
+        return RET_OSSL_ERR;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        class = CKO_PRIVATE_KEY;
+    }
+
+    /* NOTE: the following is needed because of bug:
+     * https://github.com/openssl/openssl/issues/21596
+     * it can be removed once we can depend on a recent enough version
+     * after it is fixed */
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        const OSSL_PARAM *p;
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_RSA_D);
+        if (!p) {
+            /* not really a private key */
+            class = CKO_PUBLIC_KEY;
+        }
+    }
+
+    rv = p11prov_obj_import_key(key, CKK_RSA, class, params);
+    if (rv != CKR_OK) {
+        return RET_OSSL_ERR;
+    }
+    return RET_OSSL_OK;
 }
 
 #define PUBLIC_PARAMS \
@@ -604,13 +664,14 @@ static int p11prov_rsa_export(void *keydata, int selection,
 
     /* if anything else is asked for we can't provide it, so be strict */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_rsa_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_RSA, true, cb_fn, cb_arg);
     }
 
     return RET_OSSL_ERR;
 }
 
-static const OSSL_PARAM p11prov_rsa_key_types[] = {
+#define RSA_KEY_ATTRS_SIZE 2
+static const OSSL_PARAM p11prov_rsa_key_types[RSA_KEY_ATTRS_SIZE + 1] = {
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
     OSSL_PARAM_END,
@@ -689,9 +750,8 @@ static int p11prov_rsa_get_params(void *keydata, OSSL_PARAM params[])
     }
 
     modulus = p11prov_obj_get_attr(key, CKA_MODULUS);
-    if (modulus == NULL) {
-        ret = RET_OSSL_ERR;
-        return ret;
+    if (!modulus) {
+        return RET_OSSL_ERR;
     }
 
     p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_BITS);
@@ -726,6 +786,40 @@ static int p11prov_rsa_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_N);
+    if (p) {
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        p->return_size = modulus->ulValueLen;
+        if (p->data) {
+            if (p->data_size < modulus->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            byteswap_buf(modulus->pValue, p->data, modulus->ulValueLen);
+            p->data_size = modulus->ulValueLen;
+        }
+    }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_E);
+    if (p) {
+        CK_ATTRIBUTE *exp;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        exp = p11prov_obj_get_attr(key, CKA_PUBLIC_EXPONENT);
+        if (!exp) {
+            return RET_OSSL_ERR;
+        }
+        p->return_size = exp->ulValueLen;
+        if (p->data) {
+            if (p->data_size < exp->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            byteswap_buf(exp->pValue, p->data, exp->ulValueLen);
+            p->data_size = exp->ulValueLen;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -737,8 +831,8 @@ static const OSSL_PARAM *p11prov_rsa_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
-        /* OSSL_PKEY_PARAM_RSA_N,
-         * OSSL_PKEY_PARAM_RSA_E, */
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
         /* PKCS#11 does not have restrictions associated to keys so
          * we can't support OSSL_PKEY_PARAM_MANDATORY_DIGEST yet */
         OSSL_PARAM_END,
@@ -756,6 +850,7 @@ const OSSL_DISPATCH p11prov_rsa_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(rsa, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(rsa, FREE, free),
     DISPATCH_KEYMGMT_ELEM(rsa, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(rsa, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(rsa, EXPORT, export),
@@ -900,6 +995,7 @@ DISPATCH_KEYMGMT_FN(ec, gen_settable_params);
 DISPATCH_KEYMGMT_FN(ec, load);
 DISPATCH_KEYMGMT_FN(ec, free);
 DISPATCH_KEYMGMT_FN(ec, has);
+DISPATCH_KEYMGMT_FN(ec, match);
 DISPATCH_KEYMGMT_FN(ec, import);
 DISPATCH_KEYMGMT_FN(ec, import_types);
 DISPATCH_KEYMGMT_FN(ec, export);
@@ -920,7 +1016,8 @@ static void *p11prov_ec_new(void *provctx)
         return NULL;
     }
 
-    return NULL;
+    return p11prov_obj_new(provctx, CK_UNAVAILABLE_INFORMATION,
+                           CK_INVALID_HANDLE, CK_UNAVAILABLE_INFORMATION);
 }
 
 static void *p11prov_ec_gen_init(void *provctx, int selection,
@@ -1015,11 +1112,49 @@ static int p11prov_ec_has(const void *keydata, int selection)
     return RET_OSSL_OK;
 }
 
+static int p11prov_ec_match(const void *keydata1, const void *keydata2,
+                            int selection)
+{
+    P11PROV_debug("ec match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_EC, selection);
+}
+
 static int p11prov_ec_import(void *keydata, int selection,
                              const OSSL_PARAM params[])
 {
-    P11PROV_debug("ec import %p", keydata);
-    return RET_OSSL_ERR;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    CK_OBJECT_CLASS class = CKO_PUBLIC_KEY;
+    CK_RV rv;
+
+    P11PROV_debug("ec import %p", key);
+
+    if (!key) {
+        return RET_OSSL_ERR;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        class = CKO_PRIVATE_KEY;
+    }
+
+    /* NOTE: the following is needed because of bug:
+     * https://github.com/openssl/openssl/issues/21596
+     * it can be removed once we can depend on a recent enough version
+     * after it is fixed */
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        const OSSL_PARAM *p;
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            /* not really a private key */
+            class = CKO_PUBLIC_KEY;
+        }
+    }
+
+    rv = p11prov_obj_import_key(key, CKK_EC, class, params);
+    if (rv != CKR_OK) {
+        return RET_OSSL_ERR;
+    }
+    return RET_OSSL_OK;
 }
 
 static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
@@ -1041,7 +1176,7 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 
     /* this will return the public EC_POINT as well as DOMAIN_PARAMTERS */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_EC, true, cb_fn, cb_arg);
     }
 
     return RET_OSSL_ERR;
@@ -1159,6 +1294,48 @@ static int p11prov_ec_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_EC_PUB_X);
+    if (p) {
+        CK_ATTRIBUTE *pub_x;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        ret = p11prov_obj_get_ec_public_x_y(key, &pub_x, NULL);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+
+        p->return_size = pub_x->ulValueLen;
+        if (p->data) {
+            if (p->data_size < pub_x->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            memcpy(p->data, pub_x->pValue, pub_x->ulValueLen);
+            p->data_size = pub_x->ulValueLen;
+        }
+    }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_EC_PUB_Y);
+    if (p) {
+        CK_ATTRIBUTE *pub_y;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        ret = p11prov_obj_get_ec_public_x_y(key, NULL, &pub_y);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+
+        p->return_size = pub_y->ulValueLen;
+        if (p->data) {
+            if (p->data_size < pub_y->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            memcpy(p->data, pub_y->pValue, pub_y->ulValueLen);
+            p->data_size = pub_y->ulValueLen;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -1171,6 +1348,8 @@ static const OSSL_PARAM *p11prov_ec_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_PUB_X, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_PUB_Y, NULL, 0),
         /*
          * OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY
          * OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAM
@@ -1188,8 +1367,6 @@ static const OSSL_PARAM *p11prov_ec_gettable_params(void *provctx)
          * OSSL_PKEY_PARAM_PRIV_KEY
          * OSSL_PKEY_PARAM_USE_COFACTOR_ECDH
          * OSSL_PKEY_PARAM_EC_INCLUDE_PUBLIC
-         * OSSL_PKEY_PARAM_EC_PUB_X
-         * OSSL_PKEY_PARAM_EC_PUB_Y
          */
         OSSL_PARAM_END,
     };
@@ -1206,6 +1383,7 @@ const OSSL_DISPATCH p11prov_ec_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ec, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ec, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ec, EXPORT, export),
@@ -1220,6 +1398,7 @@ DISPATCH_KEYMGMT_FN(ed25519, gen_init);
 DISPATCH_KEYMGMT_FN(ed448, gen_init);
 DISPATCH_KEYMGMT_FN(ed, gen_settable_params);
 DISPATCH_KEYMGMT_FN(ed, load);
+DISPATCH_KEYMGMT_FN(ed, match);
 DISPATCH_KEYMGMT_FN(ed, import_types);
 DISPATCH_KEYMGMT_FN(ed, export);
 DISPATCH_KEYMGMT_FN(ed, export_types);
@@ -1295,6 +1474,14 @@ static void *p11prov_ed_load(const void *reference, size_t reference_sz)
     return p11prov_common_load(reference, reference_sz, CKK_EC_EDWARDS);
 }
 
+static int p11prov_ed_match(const void *keydata1, const void *keydata2,
+                            int selection)
+{
+    P11PROV_debug("ed match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_EC_EDWARDS, selection);
+}
+
 static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
                              void *cb_arg)
 {
@@ -1314,7 +1501,8 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 
     /* this will return the public EC_POINT */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true, cb_fn,
+                                             cb_arg);
     }
 
     return RET_OSSL_ERR;
@@ -1465,6 +1653,7 @@ const OSSL_DISPATCH p11prov_ed25519_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ed, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ed, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ed, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ed, EXPORT, export),
@@ -1488,6 +1677,7 @@ const OSSL_DISPATCH p11prov_ed448_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ed, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ed, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ed, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ed, EXPORT, export),

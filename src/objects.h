@@ -47,11 +47,21 @@ CK_RV p11prov_derive_key(P11PROV_CTX *ctx, CK_SLOT_ID slotid,
 CK_RV p11prov_obj_set_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                                  P11PROV_OBJ *obj, CK_ATTRIBUTE *template,
                                  CK_ULONG tsize);
-int p11prov_obj_export_public_rsa_key(P11PROV_OBJ *obj, OSSL_CALLBACK *cb_fn,
-                                      void *cb_arg);
-int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj, OSSL_CALLBACK *cb_fn,
-                                     void *cb_arg);
 const char *p11prov_obj_get_ec_group_name(P11PROV_OBJ *obj);
+int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
+                                  bool search_related, OSSL_CALLBACK *cb_fn,
+                                  void *cb_arg);
+int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
+                                  CK_ATTRIBUTE **pub_y);
+
+#define OBJ_CMP_KEY_TYPE 0x00
+#define OBJ_CMP_KEY_PUBLIC 0x01
+#define OBJ_CMP_KEY_PRIVATE 0x02
+int p11prov_obj_key_cmp(P11PROV_OBJ *obj1, P11PROV_OBJ *obj2, CK_KEY_TYPE type,
+                        int cmp_type);
+
+CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
+                             CK_OBJECT_CLASS class, const OSSL_PARAM params[]);
 
 #define ED25519 "ED25519"
 #define ED25519_BIT_SIZE 256
