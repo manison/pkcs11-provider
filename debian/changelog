@@ -1,0 +1,5 @@
+pkcs11-provider (0.2-1) unstable; urgency=medium
+
+  * Initial release. (Closes: #1053818)
+
+ -- Luca Boccassi <bluca@debian.org>  Wed, 11 Oct 2023 21:59:35 +0000

@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+include /usr/share/dpkg/default.mk
+include /usr/share/debhelper/dh_package_notes/package-notes.mk
+
+%:
+	dh $@
+
+execute_before_dh_install:
+	find debian/pkcs11-provider \( -name '*.la' -o -name '*.a' \) -delete
