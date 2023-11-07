@@ -1,5 +1,6 @@
 EXTRA_DIST = openssl.cnf.in \
-	lsan.supp
+	lsan.supp \
+	explicit_ec.key.der explicit_ec.pub.der
 
 libspath=@abs_top_builddir@/src/.libs
 testsblddir=@abs_top_builddir@/tests
@@ -9,7 +10,7 @@ testssrcdir=@abs_srcdir@
 #VALGRIND_SUPPRESSIONS_FILES = $(top_srcdir)/tests/pkcs11-provider.supp
 VALGRIND_FLAGS = --num-callers=30 -q --keep-debuginfo=yes
 
-check_PROGRAMS = tsession tgenkey tlsctx tdigests treadkeys tfork pincache
+check_PROGRAMS = tsession tgenkey tlsctx tdigests treadkeys tcmpkeys tfork pincache
 
 tsession_SOURCES = tsession.c
 tsession_CFLAGS = $(STD_CFLAGS) $(OPENSSL_CFLAGS)
@@ -30,6 +31,10 @@ tdigests_LDADD = $(OPENSSL_LIBS)
 treadkeys_SOURCES = treadkeys.c
 treadkeys_CFLAGS = $(STD_CFLAGS) $(OPENSSL_CFLAGS)
 treadkeys_LDADD = $(OPENSSL_LIBS)
+
+tcmpkeys_SOURCES = tcmpkeys.c
+tcmpkeys_CFLAGS = $(STD_CFLAGS) $(OPENSSL_CFLAGS)
+tcmpkeys_LDADD = $(OPENSSL_LIBS)
 
 tfork_SOURCES = tfork.c
 tfork_CFLAGS = $(STD_CFLAGS) $(OPENSSL_CFLAGS)
@@ -57,7 +62,8 @@ tmp.softhsm:
 dist_check_SCRIPTS = \
 	helpers.sh setup-softhsm.sh setup-softokn.sh softhsm-proxy.sh \
 	test-wrapper tbasic tcerts tecc tecdh tedwards tdemoca thkdf \
-	toaepsha2 trsapss tdigest ttls tpubkey tfork turi trand
+	toaepsha2 trsapss tdigest ttls tpubkey tfork turi trand tecxc \
+	tcms
 
 test_LIST = \
 	basic-softokn.t basic-softhsm.t \
@@ -77,7 +83,9 @@ test_LIST = \
 	rand-softokn.t rand-softhsm.t \
 	readkeys-softokn.t readkeys-softhsm.t \
 	tls-softokn.t tls-softhsm.t \
-	uri-softokn.t uri-softhsm.t
+	uri-softokn.t uri-softhsm.t \
+	ecxc-softhsm.t \
+	cms-softokn.t
 
 .PHONY: $(test_LIST)
 

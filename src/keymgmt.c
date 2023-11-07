@@ -17,6 +17,7 @@ DISPATCH_KEYMGMT_FN(rsa, gen_settable_params);
 DISPATCH_KEYMGMT_FN(rsa, load);
 DISPATCH_KEYMGMT_FN(rsa, free);
 DISPATCH_KEYMGMT_FN(rsa, has);
+DISPATCH_KEYMGMT_FN(rsa, match);
 DISPATCH_KEYMGMT_FN(rsa, import);
 DISPATCH_KEYMGMT_FN(rsa, import_types);
 DISPATCH_KEYMGMT_FN(rsa, export);
@@ -106,9 +107,8 @@ struct key_generator {
 
     CK_KEY_TYPE type;
 
-    char *label;
-    CK_BYTE *id;
-    CK_ULONG id_len;
+    P11PROV_URI *uri;
+    char *key_usage;
 
     CK_MECHANISM mechanism;
 
@@ -139,7 +139,7 @@ static void *p11prov_common_gen_init(void *provctx, int selection,
     unsigned char def_e[] = { 0x01, 0x00, 0x01 };
     int ret;
 
-    P11PROV_debug("rsa gen_init %p", provctx);
+    P11PROV_debug("common gen_init %p", provctx);
 
     ret = p11prov_ctx_status(provctx);
     if (ret != CKR_OK) {
@@ -204,22 +204,34 @@ static int p11prov_common_gen_set_params(void *genctx,
         return RET_OSSL_OK;
     }
 
-    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_KEY_LABEL);
+    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_URI);
     if (p) {
-        ret = OSSL_PARAM_get_utf8_string(p, &ctx->label, 0);
+        if (p->data_type != OSSL_PARAM_UTF8_STRING) {
+            return RET_OSSL_ERR;
+        }
+        if (!p->data || p->data_size == 0) {
+            return RET_OSSL_ERR;
+        }
+        if (ctx->uri) {
+            p11prov_uri_free(ctx->uri);
+        }
+        ctx->uri = p11prov_parse_uri(ctx->provctx, (const char *)p->data);
+        if (!ctx->uri) {
+            return RET_OSSL_ERR;
+        }
+    }
+
+    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_KEY_USAGE);
+    if (p) {
+        if (p->data_type != OSSL_PARAM_UTF8_STRING) {
+            return RET_OSSL_ERR;
+        }
+        ret = OSSL_PARAM_get_utf8_string(p, &ctx->key_usage, 0);
         if (ret != RET_OSSL_OK) {
             return ret;
         }
     }
-    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_KEY_ID);
-    if (p) {
-        size_t id_len;
-        ret = OSSL_PARAM_get_octet_string(p, (void **)&ctx->id, 0, &id_len);
-        if (ret != RET_OSSL_OK) {
-            return ret;
-        }
-        ctx->id_len = id_len;
-    }
+
     switch (ctx->type) {
     case CKK_RSA:
         p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_RSA_BITS);
@@ -334,6 +346,112 @@ static CK_RV common_gen_callback(void *cbarg)
     return CKR_OK;
 }
 
+/* Common attributes that may currently be added to the template
+ * CKA_ID
+ * CKA_LABEL
+ */
+#define COMMON_TMPL_SIZE 2
+
+const CK_BBOOL val_true = CK_TRUE;
+const CK_BBOOL val_false = CK_FALSE;
+#define DISCARD_CONST(x) (void *)(x)
+
+static void set_bool_val(CK_ATTRIBUTE *attr, bool val)
+{
+    if (val) {
+        attr->pValue = DISCARD_CONST(&val_true);
+    } else {
+        attr->pValue = DISCARD_CONST(&val_false);
+    }
+}
+
+static void common_key_usage_set_attrs(CK_ATTRIBUTE *template, int tsize,
+                                       bool enc, bool sig, bool der, bool wrap)
+{
+    for (int i = 0; i < tsize; i++) {
+        switch (template[i].type) {
+        case CKA_ENCRYPT:
+        case CKA_DECRYPT:
+            set_bool_val(&template[i], enc);
+            break;
+        case CKA_VERIFY:
+        case CKA_VERIFY_RECOVER:
+        case CKA_SIGN:
+        case CKA_SIGN_RECOVER:
+            set_bool_val(&template[i], sig);
+            break;
+        case CKA_DERIVE:
+            set_bool_val(&template[i], der);
+            break;
+        case CKA_WRAP:
+        case CKA_UNWRAP:
+            set_bool_val(&template[i], wrap);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/*
+ * Takes a Key Usage string, which must be a space separated list of tokens.
+ * The tokens are the Key usage flag names as defined in ISO/IEC 9594-8 (X.509)
+ * Only the following tokens are recognized:
+ *  - dataEncipherment
+ *  - digitalSignature
+ *  - keyAgreement
+ *  - keyEncipherment
+ * uses: Table 25 from pkcs#11 3.1 spec for mappings for public keys
+ * and an analogous mapping for private keys
+ */
+static CK_RV common_key_usage_to_tmpl(struct key_generator *ctx,
+                                      CK_ATTRIBUTE *pubtmpl,
+                                      CK_ATTRIBUTE *privtmpl, int pubtsize,
+                                      int privtsize)
+{
+    const char *str = NULL;
+    size_t len = 0;
+    bool enc = false;
+    bool sig = false;
+    bool der = false;
+    bool wrap = false;
+
+    if (!ctx->key_usage) {
+        /* leave defaults as set by templates */
+        return CKR_OK;
+    }
+
+    str = ctx->key_usage;
+    len = strlen(ctx->key_usage);
+    while (str) {
+        const char *tok = str;
+        size_t toklen = len;
+        const char *p = strchr(str, ' ');
+        if (p) {
+            toklen = p - str;
+            len -= toklen + 1;
+            p += 1;
+        }
+        str = p;
+        if (strncmp(tok, "dataEncipherment", toklen) == 0) {
+            enc = true;
+        } else if (strncmp(tok, "digitalSignature", toklen) == 0) {
+            sig = true;
+        } else if (strncmp(tok, "keyAgreement", toklen) == 0) {
+            der = true;
+        } else if (strncmp(tok, "keyEncipherment", toklen) == 0) {
+            wrap = true;
+        } else {
+            return CKR_ARGUMENTS_BAD;
+        }
+    }
+
+    common_key_usage_set_attrs(pubtmpl, pubtsize, enc, sig, der, wrap);
+    common_key_usage_set_attrs(privtmpl, privtsize, enc, sig, der, wrap);
+
+    return CKR_OK;
+}
+
 static void *p11prov_common_gen(struct key_generator *ctx,
                                 CK_ATTRIBUTE *pubkey_template,
                                 CK_ATTRIBUTE *privkey_template, int pubtsize,
@@ -342,17 +460,29 @@ static void *p11prov_common_gen(struct key_generator *ctx,
 {
     CK_SLOT_ID slotid = CK_UNAVAILABLE_INFORMATION;
     CK_BYTE id[16];
-    CK_BYTE_PTR id_ptr;
-    CK_ULONG id_len;
     CK_OBJECT_HANDLE privkey;
     CK_OBJECT_HANDLE pubkey;
     P11PROV_SESSION *session = NULL;
     CK_SESSION_HANDLE sh;
-    P11PROV_OBJ *key = NULL;
+    P11PROV_OBJ *pub_key = NULL;
+    P11PROV_OBJ *priv_key = NULL;
+    CK_ATTRIBUTE cka_id = { 0 };
+    CK_ATTRIBUTE label = { 0 };
     CK_RV ret;
 
-    /* FIXME: how do we get a URI to select the right slot ? */
-    ret = p11prov_get_session(ctx->provctx, &slotid, NULL, NULL,
+    ret = common_key_usage_to_tmpl(ctx, pubkey_template, privkey_template,
+                                   pubtsize, privtsize);
+    if (ret != CKR_OK) {
+        P11PROV_raise(ctx->provctx, ret, "Failed to map Key Usage");
+        return NULL;
+    }
+
+    if (ctx->uri) {
+        cka_id = p11prov_uri_get_id(ctx->uri);
+        label = p11prov_uri_get_label(ctx->uri);
+    }
+
+    ret = p11prov_get_session(ctx->provctx, &slotid, NULL, ctx->uri,
                               ctx->mechanism.mechanism, NULL, NULL, true, true,
                               &session);
     if (ret != CKR_OK) {
@@ -367,36 +497,24 @@ static void *p11prov_common_gen(struct key_generator *ctx,
 
     sh = p11prov_session_handle(session);
 
-    if (ctx->id_len != 0) {
-        id_ptr = ctx->id;
-        id_len = ctx->id_len;
-    } else {
+    if (cka_id.ulValueLen == 0) {
         /* generate unique id for the key */
         ret = p11prov_GenerateRandom(ctx->provctx, sh, id, sizeof(id));
         if (ret != CKR_OK) {
-            p11prov_return_session(session);
-            return NULL;
+            goto done;
         }
-        id_ptr = id;
-        id_len = 16;
+        cka_id.type = CKA_ID;
+        cka_id.pValue = id;
+        cka_id.ulValueLen = 16;
     }
-    pubkey_template[pubtsize].type = CKA_ID;
-    pubkey_template[pubtsize].pValue = id_ptr;
-    pubkey_template[pubtsize].ulValueLen = id_len;
+    pubkey_template[pubtsize] = cka_id;
     pubtsize++;
-    privkey_template[privtsize].type = CKA_ID;
-    privkey_template[privtsize].pValue = id_ptr;
-    privkey_template[privtsize].ulValueLen = id_len;
+    privkey_template[privtsize] = cka_id;
     privtsize++;
-    if (ctx->label) {
-        CK_ULONG len = strlen(ctx->label);
-        pubkey_template[pubtsize].type = CKA_LABEL;
-        pubkey_template[pubtsize].pValue = ctx->label;
-        pubkey_template[pubtsize].ulValueLen = len;
+    if (label.ulValueLen != 0) {
+        pubkey_template[pubtsize] = label;
         pubtsize++;
-        privkey_template[privtsize].type = CKA_LABEL;
-        privkey_template[privtsize].pValue = ctx->label;
-        privkey_template[privtsize].ulValueLen = len;
+        privkey_template[privtsize] = label;
         privtsize++;
     }
 
@@ -404,18 +522,29 @@ static void *p11prov_common_gen(struct key_generator *ctx,
                                   pubkey_template, pubtsize, privkey_template,
                                   privtsize, &pubkey, &privkey);
     if (ret != CKR_OK) {
-        p11prov_return_session(session);
-        return NULL;
+        goto done;
     }
 
-    ret = p11prov_obj_from_handle(ctx->provctx, session, privkey, &key);
+    ret = p11prov_obj_from_handle(ctx->provctx, session, pubkey, &pub_key);
     if (ret != CKR_OK) {
-        p11prov_return_session(session);
-        return NULL;
+        goto done;
     }
 
+    ret = p11prov_obj_from_handle(ctx->provctx, session, privkey, &priv_key);
+    if (ret != CKR_OK) {
+        goto done;
+    }
+
+    ret = p11prov_merge_pub_attrs_into_priv(pub_key, priv_key);
+
+done:
+    if (ret != CKR_OK) {
+        p11prov_obj_free(priv_key);
+        priv_key = NULL;
+    }
     p11prov_return_session(session);
-    return key;
+    p11prov_obj_free(pub_key);
+    return priv_key;
 }
 
 static void p11prov_common_gen_cleanup(void *genctx)
@@ -424,12 +553,9 @@ static void p11prov_common_gen_cleanup(void *genctx)
 
     P11PROV_debug("common gen_cleanup %p", genctx);
 
-    if (ctx->label) {
-        OPENSSL_free(ctx->label);
-    }
-    if (ctx->id) {
-        OPENSSL_clear_free(ctx->id, ctx->id_len);
-    }
+    OPENSSL_free(ctx->key_usage);
+    p11prov_uri_free(ctx->uri);
+
     if (ctx->type == CKK_RSA) {
         if (ctx->data.rsa.allowed_types_size) {
             OPENSSL_free(ctx->data.rsa.allowed_types);
@@ -461,6 +587,27 @@ static void *p11prov_common_load(const void *reference, size_t reference_sz,
     return key;
 }
 
+static int p11prov_common_match(const void *keydata1, const void *keydata2,
+                                CK_KEY_TYPE type, int selection)
+{
+    P11PROV_OBJ *key1 = (P11PROV_OBJ *)keydata1;
+    P11PROV_OBJ *key2 = (P11PROV_OBJ *)keydata2;
+    int cmp_type = OBJ_CMP_KEY_TYPE;
+
+    if (key1 == key2) {
+        return RET_OSSL_OK;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        cmp_type |= OBJ_CMP_KEY_PUBLIC;
+    }
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        cmp_type |= OBJ_CMP_KEY_PRIVATE;
+    }
+
+    return p11prov_obj_key_cmp(key1, key2, type, cmp_type);
+}
+
 /* RSA gen key */
 static void *p11prov_rsa_gen_init(void *provctx, int selection,
                                   const OSSL_PARAM params[])
@@ -473,29 +620,27 @@ static void *p11prov_rsa_gen_init(void *provctx, int selection,
 static void *p11prov_rsa_gen(void *genctx, OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     struct key_generator *ctx = (struct key_generator *)genctx;
-    CK_BBOOL val_true = CK_TRUE;
-    /* CK_BBOOL val_false = CK_FALSE; */
 
     /* always leave space for CKA_ID and CKA_LABEL */
 #define RSA_PUBKEY_TMPL_SIZE 6
-    CK_ATTRIBUTE pubkey_template[RSA_PUBKEY_TMPL_SIZE + 2] = {
-        { CKA_ENCRYPT, &val_true, sizeof(val_true) },
-        { CKA_VERIFY, &val_true, sizeof(val_true) },
-        { CKA_WRAP, &val_true, sizeof(val_true) },
-        { CKA_TOKEN, &val_true, sizeof(CK_BBOOL) },
+    CK_ATTRIBUTE pubkey_template[RSA_PUBKEY_TMPL_SIZE + COMMON_TMPL_SIZE] = {
+        { CKA_ENCRYPT, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_VERIFY, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_WRAP, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_TOKEN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
         { CKA_MODULUS_BITS, &ctx->data.rsa.modulus_bits,
           sizeof(ctx->data.rsa.modulus_bits) },
         { CKA_PUBLIC_EXPONENT, &ctx->data.rsa.exponent,
           ctx->data.rsa.exponent_size },
     };
 #define RSA_PRIVKEY_TMPL_SIZE 6
-    CK_ATTRIBUTE privkey_template[RSA_PRIVKEY_TMPL_SIZE + 2] = {
-        { CKA_TOKEN, &val_true, sizeof(CK_BBOOL) },
-        { CKA_PRIVATE, &val_true, sizeof(CK_BBOOL) },
-        { CKA_SENSITIVE, &val_true, sizeof(CK_BBOOL) },
-        { CKA_DECRYPT, &val_true, sizeof(CK_BBOOL) },
-        { CKA_SIGN, &val_true, sizeof(CK_BBOOL) },
-        { CKA_UNWRAP, &val_true, sizeof(CK_BBOOL) },
+    CK_ATTRIBUTE privkey_template[RSA_PRIVKEY_TMPL_SIZE + COMMON_TMPL_SIZE] = {
+        { CKA_TOKEN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_PRIVATE, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_SENSITIVE, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_DECRYPT, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_SIGN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_UNWRAP, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
         /* TODO?
          * CKA_SUBJECT
          * CKA_COPYABLE = true ?
@@ -514,8 +659,7 @@ static const OSSL_PARAM *p11prov_rsa_gen_settable_params(void *genctx,
                                                          void *provctx)
 {
     static OSSL_PARAM p11prov_rsa_params[] = {
-        OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_LABEL, NULL, 0),
-        OSSL_PARAM_octet_string(P11PROV_PARAM_KEY_ID, NULL, 0),
+        OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
         OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_BITS, NULL),
         OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_PRIMES, NULL),
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
@@ -575,11 +719,49 @@ static int p11prov_rsa_has(const void *keydata, int selection)
     return RET_OSSL_OK;
 }
 
+static int p11prov_rsa_match(const void *keydata1, const void *keydata2,
+                             int selection)
+{
+    P11PROV_debug("rsa match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_RSA, selection);
+}
+
 static int p11prov_rsa_import(void *keydata, int selection,
                               const OSSL_PARAM params[])
 {
-    P11PROV_debug("rsa import %p", keydata);
-    return RET_OSSL_ERR;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    CK_OBJECT_CLASS class = CKO_PUBLIC_KEY;
+    CK_RV rv;
+
+    P11PROV_debug("rsa import %p", key);
+
+    if (!key) {
+        return RET_OSSL_ERR;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        class = CKO_PRIVATE_KEY;
+    }
+
+    /* NOTE: the following is needed because of bug:
+     * https://github.com/openssl/openssl/issues/21596
+     * it can be removed once we can depend on a recent enough version
+     * after it is fixed */
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        const OSSL_PARAM *p;
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_RSA_D);
+        if (!p) {
+            /* not really a private key */
+            class = CKO_PUBLIC_KEY;
+        }
+    }
+
+    rv = p11prov_obj_import_key(key, CKK_RSA, class, params);
+    if (rv != CKR_OK) {
+        return RET_OSSL_ERR;
+    }
+    return RET_OSSL_OK;
 }
 
 #define PUBLIC_PARAMS \
@@ -604,13 +786,14 @@ static int p11prov_rsa_export(void *keydata, int selection,
 
     /* if anything else is asked for we can't provide it, so be strict */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_rsa_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_RSA, true, cb_fn, cb_arg);
     }
 
     return RET_OSSL_ERR;
 }
 
-static const OSSL_PARAM p11prov_rsa_key_types[] = {
+#define RSA_KEY_ATTRS_SIZE 2
+static const OSSL_PARAM p11prov_rsa_key_types[RSA_KEY_ATTRS_SIZE + 1] = {
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
     OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
     OSSL_PARAM_END,
@@ -689,9 +872,8 @@ static int p11prov_rsa_get_params(void *keydata, OSSL_PARAM params[])
     }
 
     modulus = p11prov_obj_get_attr(key, CKA_MODULUS);
-    if (modulus == NULL) {
-        ret = RET_OSSL_ERR;
-        return ret;
+    if (!modulus) {
+        return RET_OSSL_ERR;
     }
 
     p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_BITS);
@@ -726,6 +908,40 @@ static int p11prov_rsa_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_N);
+    if (p) {
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        p->return_size = modulus->ulValueLen;
+        if (p->data) {
+            if (p->data_size < modulus->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            byteswap_buf(modulus->pValue, p->data, modulus->ulValueLen);
+            p->data_size = modulus->ulValueLen;
+        }
+    }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_RSA_E);
+    if (p) {
+        CK_ATTRIBUTE *exp;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        exp = p11prov_obj_get_attr(key, CKA_PUBLIC_EXPONENT);
+        if (!exp) {
+            return RET_OSSL_ERR;
+        }
+        p->return_size = exp->ulValueLen;
+        if (p->data) {
+            if (p->data_size < exp->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            byteswap_buf(exp->pValue, p->data, exp->ulValueLen);
+            p->data_size = exp->ulValueLen;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -737,8 +953,8 @@ static const OSSL_PARAM *p11prov_rsa_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_SECURITY_BITS, NULL),
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
-        /* OSSL_PKEY_PARAM_RSA_N,
-         * OSSL_PKEY_PARAM_RSA_E, */
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
         /* PKCS#11 does not have restrictions associated to keys so
          * we can't support OSSL_PKEY_PARAM_MANDATORY_DIGEST yet */
         OSSL_PARAM_END,
@@ -756,6 +972,7 @@ const OSSL_DISPATCH p11prov_rsa_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(rsa, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(rsa, FREE, free),
     DISPATCH_KEYMGMT_ELEM(rsa, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(rsa, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(rsa, EXPORT, export),
@@ -857,8 +1074,7 @@ static const OSSL_PARAM *p11prov_rsapss_gen_settable_params(void *genctx,
                                                             void *provctx)
 {
     static OSSL_PARAM p11prov_rsapss_params[] = {
-        OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_LABEL, NULL, 0),
-        OSSL_PARAM_octet_string(P11PROV_PARAM_KEY_ID, NULL, 0),
+        OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
         OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_BITS, NULL),
         OSSL_PARAM_size_t(OSSL_PKEY_PARAM_RSA_PRIMES, NULL),
         OSSL_PARAM_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0),
@@ -900,6 +1116,7 @@ DISPATCH_KEYMGMT_FN(ec, gen_settable_params);
 DISPATCH_KEYMGMT_FN(ec, load);
 DISPATCH_KEYMGMT_FN(ec, free);
 DISPATCH_KEYMGMT_FN(ec, has);
+DISPATCH_KEYMGMT_FN(ec, match);
 DISPATCH_KEYMGMT_FN(ec, import);
 DISPATCH_KEYMGMT_FN(ec, import_types);
 DISPATCH_KEYMGMT_FN(ec, export);
@@ -907,6 +1124,8 @@ DISPATCH_KEYMGMT_FN(ec, export_types);
 DISPATCH_KEYMGMT_FN(ec, query_operation_name);
 DISPATCH_KEYMGMT_FN(ec, get_params);
 DISPATCH_KEYMGMT_FN(ec, gettable_params);
+DISPATCH_KEYMGMT_FN(ec, set_params);
+DISPATCH_KEYMGMT_FN(ec, settable_params);
 
 static void *p11prov_ec_new(void *provctx)
 {
@@ -920,7 +1139,8 @@ static void *p11prov_ec_new(void *provctx)
         return NULL;
     }
 
-    return NULL;
+    return p11prov_obj_new(provctx, CK_UNAVAILABLE_INFORMATION,
+                           CK_INVALID_HANDLE, CK_UNAVAILABLE_INFORMATION);
 }
 
 static void *p11prov_ec_gen_init(void *provctx, int selection,
@@ -934,26 +1154,24 @@ static void *p11prov_ec_gen_init(void *provctx, int selection,
 static void *p11prov_ec_gen(void *genctx, OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     struct key_generator *ctx = (struct key_generator *)genctx;
-    CK_BBOOL val_true = CK_TRUE;
-    /* CK_BBOOL val_false = CK_FALSE; */
 
     /* always leave space for CKA_ID and CKA_LABEL */
 #define EC_PUBKEY_TMPL_SIZE 5
-    CK_ATTRIBUTE pubkey_template[EC_PUBKEY_TMPL_SIZE + 2] = {
-        { CKA_TOKEN, &val_true, sizeof(CK_BBOOL) },
-        { CKA_DERIVE, &val_true, sizeof(val_true) },
-        { CKA_VERIFY, &val_true, sizeof(val_true) },
-        { CKA_WRAP, &val_true, sizeof(val_true) },
+    CK_ATTRIBUTE pubkey_template[EC_PUBKEY_TMPL_SIZE + COMMON_TMPL_SIZE] = {
+        { CKA_TOKEN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_DERIVE, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_VERIFY, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_WRAP, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
         { CKA_EC_PARAMS, (CK_BYTE *)ctx->data.ec.ec_params,
           ctx->data.ec.ec_params_size },
     };
-#define EC_PRIVKEY_TMPL_SIZE 6
-    CK_ATTRIBUTE privkey_template[EC_PRIVKEY_TMPL_SIZE + 2] = {
-        { CKA_TOKEN, &val_true, sizeof(CK_BBOOL) },
-        { CKA_PRIVATE, &val_true, sizeof(CK_BBOOL) },
-        { CKA_SENSITIVE, &val_true, sizeof(CK_BBOOL) },
-        { CKA_SIGN, &val_true, sizeof(CK_BBOOL) },
-        { CKA_UNWRAP, &val_true, sizeof(CK_BBOOL) },
+#define EC_PRIVKEY_TMPL_SIZE 5
+    CK_ATTRIBUTE privkey_template[EC_PRIVKEY_TMPL_SIZE + COMMON_TMPL_SIZE] = {
+        { CKA_TOKEN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_PRIVATE, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_SENSITIVE, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_SIGN, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
+        { CKA_UNWRAP, DISCARD_CONST(&val_true), sizeof(CK_BBOOL) },
         /* TODO?
          * CKA_SUBJECT
          * CKA_COPYABLE = true ?
@@ -972,8 +1190,7 @@ static const OSSL_PARAM *p11prov_ec_gen_settable_params(void *genctx,
                                                         void *provctx)
 {
     static OSSL_PARAM p11prov_ec_params[] = {
-        OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_LABEL, NULL, 0),
-        OSSL_PARAM_octet_string(P11PROV_PARAM_KEY_ID, NULL, 0),
+        OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
         OSSL_PARAM_END,
     };
@@ -1015,11 +1232,49 @@ static int p11prov_ec_has(const void *keydata, int selection)
     return RET_OSSL_OK;
 }
 
+static int p11prov_ec_match(const void *keydata1, const void *keydata2,
+                            int selection)
+{
+    P11PROV_debug("ec match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_EC, selection);
+}
+
 static int p11prov_ec_import(void *keydata, int selection,
                              const OSSL_PARAM params[])
 {
-    P11PROV_debug("ec import %p", keydata);
-    return RET_OSSL_ERR;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    CK_OBJECT_CLASS class = CKO_PUBLIC_KEY;
+    CK_RV rv;
+
+    P11PROV_debug("ec import %p", key);
+
+    if (!key) {
+        return RET_OSSL_ERR;
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        class = CKO_PRIVATE_KEY;
+    }
+
+    /* NOTE: the following is needed because of bug:
+     * https://github.com/openssl/openssl/issues/21596
+     * it can be removed once we can depend on a recent enough version
+     * after it is fixed */
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        const OSSL_PARAM *p;
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            /* not really a private key */
+            class = CKO_PUBLIC_KEY;
+        }
+    }
+
+    rv = p11prov_obj_import_key(key, CKK_EC, class, params);
+    if (rv != CKR_OK) {
+        return RET_OSSL_ERR;
+    }
+    return RET_OSSL_OK;
 }
 
 static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
@@ -1041,7 +1296,7 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 
     /* this will return the public EC_POINT as well as DOMAIN_PARAMTERS */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_EC, true, cb_fn, cb_arg);
     }
 
     return RET_OSSL_ERR;
@@ -1159,6 +1414,48 @@ static int p11prov_ec_get_params(void *keydata, OSSL_PARAM params[])
             return ret;
         }
     }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_EC_PUB_X);
+    if (p) {
+        CK_ATTRIBUTE *pub_x;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        ret = p11prov_obj_get_ec_public_x_y(key, &pub_x, NULL);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+
+        p->return_size = pub_x->ulValueLen;
+        if (p->data) {
+            if (p->data_size < pub_x->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            memcpy(p->data, pub_x->pValue, pub_x->ulValueLen);
+            p->data_size = pub_x->ulValueLen;
+        }
+    }
+    p = OSSL_PARAM_locate(params, OSSL_PKEY_PARAM_EC_PUB_Y);
+    if (p) {
+        CK_ATTRIBUTE *pub_y;
+
+        if (p->data_type != OSSL_PARAM_UNSIGNED_INTEGER) {
+            return RET_OSSL_ERR;
+        }
+        ret = p11prov_obj_get_ec_public_x_y(key, NULL, &pub_y);
+        if (ret != RET_OSSL_OK) {
+            return ret;
+        }
+
+        p->return_size = pub_y->ulValueLen;
+        if (p->data) {
+            if (p->data_size < pub_y->ulValueLen) {
+                return RET_OSSL_ERR;
+            }
+            memcpy(p->data, pub_y->pValue, pub_y->ulValueLen);
+            p->data_size = pub_y->ulValueLen;
+        }
+    }
 
     return RET_OSSL_OK;
 }
@@ -1171,6 +1468,8 @@ static const OSSL_PARAM *p11prov_ec_gettable_params(void *provctx)
         OSSL_PARAM_int(OSSL_PKEY_PARAM_MAX_SIZE, NULL),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, NULL, 0),
         OSSL_PARAM_utf8_string(OSSL_PKEY_PARAM_DEFAULT_DIGEST, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_PUB_X, NULL, 0),
+        OSSL_PARAM_BN(OSSL_PKEY_PARAM_EC_PUB_Y, NULL, 0),
         /*
          * OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY
          * OSSL_PKEY_PARAM_EC_DECODED_FROM_EXPLICIT_PARAM
@@ -1188,9 +1487,41 @@ static const OSSL_PARAM *p11prov_ec_gettable_params(void *provctx)
          * OSSL_PKEY_PARAM_PRIV_KEY
          * OSSL_PKEY_PARAM_USE_COFACTOR_ECDH
          * OSSL_PKEY_PARAM_EC_INCLUDE_PUBLIC
-         * OSSL_PKEY_PARAM_EC_PUB_X
-         * OSSL_PKEY_PARAM_EC_PUB_Y
          */
+        OSSL_PARAM_END,
+    };
+    return params;
+}
+
+static int p11prov_ec_set_params(void *keydata, const OSSL_PARAM params[])
+{
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    const OSSL_PARAM *p;
+
+    P11PROV_debug("ec set params %p", keydata);
+
+    if (key == NULL) {
+        return RET_OSSL_ERR;
+    }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY);
+    if (p) {
+        if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+            return RET_OSSL_ERR;
+        }
+        if (p11prov_obj_set_ec_encoded_public_key(key, p->data, p->data_size)
+            != CKR_OK) {
+            return RET_OSSL_ERR;
+        }
+    }
+
+    return RET_OSSL_OK;
+}
+
+static const OSSL_PARAM *p11prov_ec_settable_params(void *provctx)
+{
+    static const OSSL_PARAM params[] = {
+        OSSL_PARAM_octet_string(OSSL_PKEY_PARAM_ENCODED_PUBLIC_KEY, NULL, 0),
         OSSL_PARAM_END,
     };
     return params;
@@ -1206,6 +1537,7 @@ const OSSL_DISPATCH p11prov_ec_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ec, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ec, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ec, EXPORT, export),
@@ -1213,6 +1545,8 @@ const OSSL_DISPATCH p11prov_ec_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ec, QUERY_OPERATION_NAME, query_operation_name),
     DISPATCH_KEYMGMT_ELEM(ec, GET_PARAMS, get_params),
     DISPATCH_KEYMGMT_ELEM(ec, GETTABLE_PARAMS, gettable_params),
+    DISPATCH_KEYMGMT_ELEM(ec, SET_PARAMS, set_params),
+    DISPATCH_KEYMGMT_ELEM(ec, SETTABLE_PARAMS, settable_params),
     { 0, NULL },
 };
 
@@ -1220,6 +1554,7 @@ DISPATCH_KEYMGMT_FN(ed25519, gen_init);
 DISPATCH_KEYMGMT_FN(ed448, gen_init);
 DISPATCH_KEYMGMT_FN(ed, gen_settable_params);
 DISPATCH_KEYMGMT_FN(ed, load);
+DISPATCH_KEYMGMT_FN(ed, match);
 DISPATCH_KEYMGMT_FN(ed, import_types);
 DISPATCH_KEYMGMT_FN(ed, export);
 DISPATCH_KEYMGMT_FN(ed, export_types);
@@ -1282,8 +1617,7 @@ static const OSSL_PARAM *p11prov_ed_gen_settable_params(void *genctx,
                                                         void *provctx)
 {
     static OSSL_PARAM p11prov_ed_params[] = {
-        OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_LABEL, NULL, 0),
-        OSSL_PARAM_octet_string(P11PROV_PARAM_KEY_ID, NULL, 0),
+        OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
         OSSL_PARAM_END,
     };
     return p11prov_ed_params;
@@ -1293,6 +1627,14 @@ static void *p11prov_ed_load(const void *reference, size_t reference_sz)
 {
     P11PROV_debug("ed load %p, %ld", reference, reference_sz);
     return p11prov_common_load(reference, reference_sz, CKK_EC_EDWARDS);
+}
+
+static int p11prov_ed_match(const void *keydata1, const void *keydata2,
+                            int selection)
+{
+    P11PROV_debug("ed match %p %p %d", keydata1, keydata2, selection);
+
+    return p11prov_common_match(keydata1, keydata2, CKK_EC_EDWARDS, selection);
 }
 
 static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
@@ -1314,7 +1656,8 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 
     /* this will return the public EC_POINT */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_ec_key(key, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true, cb_fn,
+                                             cb_arg);
     }
 
     return RET_OSSL_ERR;
@@ -1465,6 +1808,7 @@ const OSSL_DISPATCH p11prov_ed25519_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ed, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ed, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ed, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ed, EXPORT, export),
@@ -1488,6 +1832,7 @@ const OSSL_DISPATCH p11prov_ed448_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(ed, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(ec, FREE, free),
     DISPATCH_KEYMGMT_ELEM(ec, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(ed, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(ec, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(ed, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(ed, EXPORT, export),
