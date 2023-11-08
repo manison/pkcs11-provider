@@ -2,6 +2,7 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #define _GNU_SOURCE
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <openssl/core_names.h>
@@ -27,6 +28,52 @@ static void hexify(char *out, unsigned char *byte, size_t len)
         }
     }
     out[len * 3] = '\0';
+}
+
+static void check_rsa_key(EVP_PKEY *pubkey)
+{
+    BIGNUM *tmp = NULL;
+    int ret;
+
+    ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_E, &tmp);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to get E param from public key");
+        exit(EXIT_FAILURE);
+    } else {
+        BN_free(tmp);
+        tmp = NULL;
+    }
+    ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_N, &tmp);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to get N param from public key");
+        exit(EXIT_FAILURE);
+    } else {
+        BN_free(tmp);
+        tmp = NULL;
+    }
+}
+
+static void check_ec_key(EVP_PKEY *pubkey)
+{
+    BIGNUM *tmp = NULL;
+    int ret;
+
+    ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_EC_PUB_X, &tmp);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to get X param from public key");
+        exit(EXIT_FAILURE);
+    } else {
+        BN_free(tmp);
+        tmp = NULL;
+    }
+    ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_EC_PUB_Y, &tmp);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to get Y param from public key");
+        exit(EXIT_FAILURE);
+    } else {
+        BN_free(tmp);
+        tmp = NULL;
+    }
 }
 
 static void check_keys(OSSL_STORE_CTX *store, const char *key_type)
@@ -69,54 +116,18 @@ static void check_keys(OSSL_STORE_CTX *store, const char *key_type)
     }
 
     /* check we can get pub params from key */
-    if (strcmp(key_type, "RSA") == 0) {
-        BIGNUM *tmp = NULL;
-        int ret;
-
-        ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_E, &tmp);
-        if (ret != 1) {
-            fprintf(stderr, "Failed to get E param from public key");
-            exit(EXIT_FAILURE);
-        } else {
-            BN_free(tmp);
-            tmp = NULL;
-        }
-        ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_RSA_N, &tmp);
-        if (ret != 1) {
-            fprintf(stderr, "Failed to get N param from public key");
-            exit(EXIT_FAILURE);
-        } else {
-            BN_free(tmp);
-            tmp = NULL;
-        }
+    if (strcmp(key_type, "RSA") == 0 || strcmp(key_type, "RSA-PSS") == 0) {
+        check_rsa_key(pubkey);
     } else if (strcmp(key_type, "EC") == 0) {
-        BIGNUM *tmp = NULL;
-        int ret;
-
-        ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_EC_PUB_X, &tmp);
-        if (ret != 1) {
-            fprintf(stderr, "Failed to get X param from public key");
-            exit(EXIT_FAILURE);
-        } else {
-            BN_free(tmp);
-            tmp = NULL;
-        }
-        ret = EVP_PKEY_get_bn_param(pubkey, OSSL_PKEY_PARAM_EC_PUB_Y, &tmp);
-        if (ret != 1) {
-            fprintf(stderr, "Failed to get Y param from public key");
-            exit(EXIT_FAILURE);
-        } else {
-            BN_free(tmp);
-            tmp = NULL;
-        }
+        check_ec_key(pubkey);
     }
 
     EVP_PKEY_free(privkey);
     EVP_PKEY_free(pubkey);
 }
 
-static void gen_keys(const char *key_type, const char *label, unsigned char *id,
-                     const char *idhex, const OSSL_PARAM *params)
+static void gen_keys(const char *key_type, const char *label, const char *idhex,
+                     const OSSL_PARAM *params, bool fail)
 {
     EVP_PKEY_CTX *ctx;
     EVP_PKEY *key = NULL;
@@ -124,6 +135,8 @@ static void gen_keys(const char *key_type, const char *label, unsigned char *id,
     OSSL_STORE_CTX *store;
     OSSL_STORE_SEARCH *search;
     int ret;
+
+    fprintf(stdout, "Generate %s\n", key_type);
 
     ctx = EVP_PKEY_CTX_new_from_name(NULL, key_type, "provider=pkcs11");
     if (ctx == NULL) {
@@ -137,12 +150,31 @@ static void gen_keys(const char *key_type, const char *label, unsigned char *id,
         exit(EXIT_FAILURE);
     }
 
-    EVP_PKEY_CTX_set_params(ctx, params);
+    ret = EVP_PKEY_CTX_set_params(ctx, params);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to set params\n");
+        exit(EXIT_FAILURE);
+    }
 
     ret = EVP_PKEY_generate(ctx, &key);
     if (ret != 1) {
-        fprintf(stderr, "Failed to generate key\n");
+        if (!fail) {
+            fprintf(stderr, "Failed to generate key\n");
+            exit(EXIT_FAILURE);
+        }
+        EVP_PKEY_CTX_free(ctx);
+        return;
+    }
+
+    if (fail) {
+        fprintf(stderr, "Key generation unexpectedly succeeded\n");
         exit(EXIT_FAILURE);
+    }
+
+    if (strcmp(key_type, "RSA") == 0 || strcmp(key_type, "RSA-PSS") == 0) {
+        check_rsa_key(key);
+    } else if (strcmp(key_type, "EC") == 0) {
+        check_ec_key(key);
     }
 
     EVP_PKEY_free(key);
@@ -151,6 +183,8 @@ static void gen_keys(const char *key_type, const char *label, unsigned char *id,
     ctx = NULL;
 
     /* now try to search by id */
+    fprintf(stdout, "Search by ID\n");
+
     ret = asprintf(&uri, "pkcs11:id=%s", idhex);
     if (ret == -1) {
         fprintf(stderr, "Failed to allocate uri\n");
@@ -169,6 +203,8 @@ static void gen_keys(const char *key_type, const char *label, unsigned char *id,
     OSSL_STORE_close(store);
 
     /* now make sure we can filter by label */
+    fprintf(stdout, "Search by Label\n");
+
     store = OSSL_STORE_open("pkcs11:", NULL, NULL, NULL, NULL);
     if (store == NULL) {
         fprintf(stderr, "Failed to open pkcs11 store\n");
@@ -192,13 +228,96 @@ static void gen_keys(const char *key_type, const char *label, unsigned char *id,
     OSSL_STORE_close(store);
 }
 
+static void sign_test(const char *label, bool fail)
+{
+    OSSL_STORE_CTX *store;
+    OSSL_STORE_SEARCH *search;
+    OSSL_STORE_INFO *info;
+    EVP_PKEY *privkey = NULL;
+    EVP_MD_CTX *ctx = NULL;
+    EVP_PKEY_CTX *pctx = NULL;
+    const unsigned char data[] = "Plaintext Data";
+    unsigned char sigret[4096];
+    size_t siglen = 4096;
+    int ret;
+
+    store = OSSL_STORE_open("pkcs11:", NULL, NULL, NULL, NULL);
+    if (store == NULL) {
+        fprintf(stderr, "Failed to open pkcs11 store\n");
+        exit(EXIT_FAILURE);
+    }
+
+    search = OSSL_STORE_SEARCH_by_alias(label);
+    if (search == NULL) {
+        fprintf(stderr, "Failed to create store search filter\n");
+        exit(EXIT_FAILURE);
+    }
+    ret = OSSL_STORE_find(store, search);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to set store search filter\n");
+        exit(EXIT_FAILURE);
+    }
+    OSSL_STORE_SEARCH_free(search);
+
+    for (info = OSSL_STORE_load(store); info != NULL;
+         info = OSSL_STORE_load(store)) {
+        int type = OSSL_STORE_INFO_get_type(info);
+
+        if (type == OSSL_STORE_INFO_PKEY) {
+            privkey = OSSL_STORE_INFO_get1_PKEY(info);
+            OSSL_STORE_INFO_free(info);
+            break;
+        }
+        OSSL_STORE_INFO_free(info);
+    }
+
+    OSSL_STORE_close(store);
+
+    if (privkey == NULL) {
+        fprintf(stderr, "Failed to load private key\n");
+        exit(EXIT_FAILURE);
+    }
+
+    ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Failed to init MD_CTX\n");
+        exit(EXIT_FAILURE);
+    }
+
+    ret = EVP_DigestSignInit(ctx, &pctx, EVP_sha256(), NULL, privkey);
+    if (ret == 0) {
+        fprintf(stderr, "Failed to init Sig Ctx\n");
+        exit(EXIT_FAILURE);
+    }
+
+    ret = EVP_DigestSign(ctx, sigret, &siglen, data, sizeof(data));
+    if (ret == 0) {
+        if (!fail) {
+            fprintf(stderr, "Failed to generate signature\n");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        if (fail) {
+            fprintf(stderr, "Expected failure, but signature worked\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    EVP_PKEY_free(privkey);
+    EVP_MD_CTX_free(ctx);
+}
+
 int main(int argc, char *argv[])
 {
     char *label;
     unsigned char id[16];
     char idhex[16 * 3 + 1];
+    char *uri;
     size_t rsa_bits = 3072;
-    OSSL_PARAM params[5];
+    const char *key_usage = "dataEncipherment keyEncipherment";
+    const char *bad_usage = "dataEncipherment gibberish ";
+    OSSL_PARAM params[4];
+    int miniid;
     int ret;
 
     /* RSA */
@@ -207,19 +326,25 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to set generate key id\n");
         exit(EXIT_FAILURE);
     }
-    hexify(idhex, id, 16);
-    ret = asprintf(&label, "Test RSA gen [%.9s]", idhex);
+    miniid = (id[0] << 24) + (id[1] << 16) + (id[2] << 8) + id[3];
+    ret = asprintf(&label, "Test-RSA-gen-%08x", miniid);
     if (ret == -1) {
         fprintf(stderr, "Failed to make label");
         exit(EXIT_FAILURE);
     }
-    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_key_label", label, 0);
-    params[1] = OSSL_PARAM_construct_octet_string("pkcs11_key_id", id, 16);
-    params[2] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
-    params[3] = OSSL_PARAM_construct_end();
+    hexify(idhex, id, 16);
+    ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+    if (ret == -1) {
+        fprintf(stderr, "Failed to make label");
+        exit(EXIT_FAILURE);
+    }
+    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+    params[1] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    params[2] = OSSL_PARAM_construct_end();
 
-    gen_keys("RSA", label, id, idhex, params);
+    gen_keys("RSA", label, idhex, params, false);
     free(label);
+    free(uri);
 
     /* RSA-PSS */
     ret = RAND_bytes(id, 16);
@@ -227,21 +352,27 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to set generate key id\n");
         exit(EXIT_FAILURE);
     }
-    hexify(idhex, id, 16);
-    ret = asprintf(&label, "Test RSA-PSS gen [%.9s]", idhex);
+    miniid = (id[0] << 24) + (id[1] << 16) + (id[2] << 8) + id[3];
+    ret = asprintf(&label, "Test-RSA-PSS-gen-%08x", miniid);
     if (ret == -1) {
         fprintf(stderr, "Failed to make label");
         exit(EXIT_FAILURE);
     }
-    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_key_label", label, 0);
-    params[1] = OSSL_PARAM_construct_octet_string("pkcs11_key_id", id, 16);
-    params[2] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
-    params[3] = OSSL_PARAM_construct_utf8_string("rsa_pss_keygen_md",
+    hexify(idhex, id, 16);
+    ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+    if (ret == -1) {
+        fprintf(stderr, "Failed to make label");
+        exit(EXIT_FAILURE);
+    }
+    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+    params[1] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    params[2] = OSSL_PARAM_construct_utf8_string("rsa_pss_keygen_md",
                                                  (char *)"SHA256", 0);
-    params[4] = OSSL_PARAM_construct_end();
+    params[3] = OSSL_PARAM_construct_end();
 
-    gen_keys("RSA-PSS", label, id, idhex, params);
+    gen_keys("RSA-PSS", label, idhex, params, false);
     free(label);
+    free(uri);
 
     /* EC */
     ret = RAND_bytes(id, 16);
@@ -249,20 +380,62 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to set generate key id\n");
         exit(EXIT_FAILURE);
     }
-    hexify(idhex, id, 16);
-    ret = asprintf(&label, "Test EC gen [%.9s]", idhex);
+    miniid = (id[0] << 24) + (id[1] << 16) + (id[2] << 8) + id[3];
+    ret = asprintf(&label, "Test-EC-gen-%08x", miniid);
     if (ret == -1) {
         fprintf(stderr, "Failed to make label");
         exit(EXIT_FAILURE);
     }
-    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_key_label", label, 0);
-    params[1] = OSSL_PARAM_construct_octet_string("pkcs11_key_id", id, 16);
-    params[2] = OSSL_PARAM_construct_utf8_string("ec_paramgen_curve",
+    hexify(idhex, id, 16);
+    ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+    if (ret == -1) {
+        fprintf(stderr, "Failed to make label");
+        exit(EXIT_FAILURE);
+    }
+    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+    params[1] = OSSL_PARAM_construct_utf8_string("ec_paramgen_curve",
                                                  (char *)"P-256", 0);
+    params[2] = OSSL_PARAM_construct_end();
+
+    gen_keys("EC", label, idhex, params, false);
+    free(label);
+    free(uri);
+
+    /* RSA with Key Usage restrictions */
+    ret = RAND_bytes(id, 16);
+    if (ret != 1) {
+        fprintf(stderr, "Failed to set generate key id\n");
+        exit(EXIT_FAILURE);
+    }
+    miniid = (id[0] << 24) + (id[1] << 16) + (id[2] << 8) + id[3];
+    ret = asprintf(&label, "Test-RSA-Key-Usage-%08x", miniid);
+    if (ret == -1) {
+        fprintf(stderr, "Failed to make label");
+        exit(EXIT_FAILURE);
+    }
+    hexify(idhex, id, 16);
+    ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+    if (ret == -1) {
+        fprintf(stderr, "Failed to make label");
+        exit(EXIT_FAILURE);
+    }
+    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+    params[1] = OSSL_PARAM_construct_utf8_string("pkcs11_key_usage",
+                                                 (char *)key_usage, 0);
+    params[2] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
     params[3] = OSSL_PARAM_construct_end();
 
-    gen_keys("EC", label, id, idhex, params);
+    gen_keys("RSA", label, idhex, params, false);
+
+    sign_test(label, true);
+
+    params[1] = OSSL_PARAM_construct_utf8_string("pkcs11_key_usage",
+                                                 (char *)bad_usage, 0);
+
+    gen_keys("RSA", label, idhex, params, true);
+
     free(label);
+    free(uri);
 
     fprintf(stderr, "ALL A-OK!");
     exit(EXIT_SUCCESS);
