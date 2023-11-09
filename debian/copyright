@@ -3,6 +3,7 @@ Source: https://github.com/latchset/pkcs11-provider.git
 
 Files: *
 Copyright: 2022-2023 Red Hat
+           2022 Internet Systems Consortium, Inc
            2022 Dmitry Belyavskiy <beldmit@gmail.com>
            2022 Doug Engert <deengert@gmail.com>
            2022 Holger Dengler <dengler@linux.ibm.com>
