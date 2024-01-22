@@ -18,8 +18,6 @@ struct p11prov_ctx {
         P11PROV_IN_ERROR,
     } status;
 
-    pthread_rwlock_t rwlock;
-
     /* Provider handles */
     const OSSL_CORE_HANDLE *handle;
     OSSL_LIB_CTX *libctx;
@@ -37,6 +35,7 @@ struct p11prov_ctx {
     /* cfg quirks */
     bool no_deinit;
     bool no_allowed_mechanisms;
+    bool no_operation_state;
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -51,6 +50,7 @@ struct p11prov_ctx {
     OSSL_ALGORITHM *op_asym_cipher;
     OSSL_ALGORITHM *op_encoder;
 
+    pthread_rwlock_t quirk_lock;
     struct quirk *quirks;
     int nquirks;
 };
@@ -240,7 +240,7 @@ CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
     int lock;
     CK_RV ret;
 
-    lock = pthread_rwlock_rdlock(&ctx->rwlock);
+    lock = pthread_rwlock_rdlock(&ctx->quirk_lock);
     if (lock != 0) {
         ret = CKR_CANT_LOCK;
         P11PROV_raise(ctx, ret, "Failure to rdlock! (%d)", errno);
@@ -281,7 +281,7 @@ CK_RV p11prov_ctx_get_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
     ret = CKR_OK;
 
 done:
-    lock = pthread_rwlock_unlock(&ctx->rwlock);
+    lock = pthread_rwlock_unlock(&ctx->quirk_lock);
     if (lock != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK, "Failure to unlock! (%d)", errno);
         /* we do not return an error in this case, as we got the info */
@@ -329,7 +329,7 @@ CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
         memcpy(_data, data, _size);
     }
 
-    lock = pthread_rwlock_wrlock(&ctx->rwlock);
+    lock = pthread_rwlock_wrlock(&ctx->quirk_lock);
     if (lock != 0) {
         ret = CKR_CANT_LOCK;
         P11PROV_raise(ctx, ret, "Failure to wrlock! (%d)", errno);
@@ -380,7 +380,7 @@ CK_RV p11prov_ctx_set_quirk(P11PROV_CTX *ctx, CK_SLOT_ID id, const char *name,
 
 done:
     P11PROV_debug("Set quirk '%s' of size %lu", name, size);
-    lock = pthread_rwlock_unlock(&ctx->rwlock);
+    lock = pthread_rwlock_unlock(&ctx->quirk_lock);
     if (lock != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK, "Failure to unlock! (%d)", errno);
         /* we do not return an error in this case, as we got the info */
@@ -515,13 +515,6 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
 {
     int ret;
 
-    ret = pthread_rwlock_wrlock(&ctx->rwlock);
-    if (ret != 0) {
-        P11PROV_raise(ctx, CKR_CANT_LOCK,
-                      "Failure to wrlock! Data corruption may happen (%d)",
-                      errno);
-    }
-
     if (ctx->no_deinit) {
         ctx->status = P11PROV_NO_DEINIT;
     }
@@ -549,6 +542,13 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
     p11prov_module_free(ctx->module);
     ctx->module = NULL;
 
+    ret = pthread_rwlock_wrlock(&ctx->quirk_lock);
+    if (ret != 0) {
+        P11PROV_raise(ctx, CKR_CANT_LOCK,
+                      "Failure to wrlock! Data corruption may happen (%d)",
+                      errno);
+    }
+
     if (ctx->quirks) {
         for (int i = 0; i < ctx->nquirks; i++) {
             OPENSSL_free(ctx->quirks[i].name);
@@ -560,22 +560,23 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
         OPENSSL_free(ctx->quirks);
     }
 
-    /* remove from pool */
-    context_rm_pool(ctx);
-
-    ret = pthread_rwlock_unlock(&ctx->rwlock);
+    ret = pthread_rwlock_unlock(&ctx->quirk_lock);
     if (ret != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK,
                       "Failure to unlock! Data corruption may happen (%d)",
                       errno);
     }
 
-    ret = pthread_rwlock_destroy(&ctx->rwlock);
+    ret = pthread_rwlock_destroy(&ctx->quirk_lock);
     if (ret != 0) {
         P11PROV_raise(ctx, CKR_CANT_LOCK,
                       "Failure to free lock! Data corruption may happen (%d)",
                       errno);
     }
+
+    /* remove from pool */
+    context_rm_pool(ctx);
+
     OPENSSL_clear_free(ctx, sizeof(P11PROV_CTX));
 }
 
@@ -607,6 +608,20 @@ int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx)
 {
     P11PROV_debug("cache_sessions = %d", ctx->cache_sessions);
     return ctx->cache_sessions;
+}
+
+bool p11prov_ctx_no_operation_state(P11PROV_CTX *ctx)
+{
+    return ctx->no_operation_state;
+}
+
+CK_INFO p11prov_ctx_get_ck_info(P11PROV_CTX *ctx)
+{
+    if (!ctx->module) {
+        CK_INFO info = { 0 };
+        return info;
+    }
+    return p11prov_module_ck_info(ctx->module);
 }
 
 static void p11prov_teardown(void *ctx)
@@ -1311,7 +1326,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
     }
     ctx->handle = handle;
 
-    ret = pthread_rwlock_init(&ctx->rwlock, NULL);
+    ret = pthread_rwlock_init(&ctx->quirk_lock, NULL);
     if (ret != 0) {
         ret = errno;
         P11PROV_debug("rwlock init failed (%d)", ret);
@@ -1456,6 +1471,8 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
                 ctx->no_deinit = true;
             } else if (strncmp(str, "no-allowed-mechanisms", toklen) == 0) {
                 ctx->no_allowed_mechanisms = true;
+            } else if (strncmp(str, "no-operation-state", toklen) == 0) {
+                ctx->no_operation_state = true;
             }
             len -= toklen;
             if (sep) {
