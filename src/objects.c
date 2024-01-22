@@ -40,6 +40,8 @@ struct p11prov_obj {
     CK_BBOOL cka_copyable;
     CK_BBOOL cka_token;
 
+    P11PROV_URI *refresh_uri;
+
     union {
         struct p11prov_key key;
         struct p11prov_crt crt;
@@ -448,6 +450,8 @@ void p11prov_obj_free(P11PROV_OBJ *obj)
     }
     OPENSSL_free(obj->attrs);
 
+    p11prov_uri_free(obj->refresh_uri);
+
     OPENSSL_clear_free(obj, sizeof(P11PROV_OBJ));
 }
 
@@ -496,6 +500,35 @@ CK_ATTRIBUTE *p11prov_obj_get_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type)
     }
 
     return NULL;
+}
+
+bool p11prov_obj_get_bool(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type, bool def)
+{
+    CK_ATTRIBUTE *attr = NULL;
+
+    if (!obj) {
+        return def;
+    }
+
+    for (int i = 0; i < obj->numattrs; i++) {
+        if (obj->attrs[i].type == type) {
+            attr = &obj->attrs[i];
+        }
+    }
+
+    if (!attr || !attr->pValue) {
+        return def;
+    }
+
+    if (attr->ulValueLen == sizeof(CK_BBOOL)) {
+        if (*((CK_BBOOL *)attr->pValue) == CK_FALSE) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    return def;
 }
 
 CK_KEY_TYPE p11prov_obj_get_key_type(P11PROV_OBJ *obj)
@@ -566,8 +599,9 @@ P11PROV_CTX *p11prov_obj_get_prov_ctx(P11PROV_OBJ *obj)
 
 /* CKA_ID
  * CKA_LABEL
+ * CKA_ALWAYS_AUTHENTICATE
  * CKA_ALLOWED_MECHANISMS see p11prov_obj_from_handle() */
-#define BASE_KEY_ATTRS_NUM 3
+#define BASE_KEY_ATTRS_NUM 4
 
 #define RSA_ATTRS_NUM (BASE_KEY_ATTRS_NUM + 2)
 static int fetch_rsa_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
@@ -588,6 +622,7 @@ static int fetch_rsa_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     FA_SET_BUF_ALLOC(attrs, num, CKA_PUBLIC_EXPONENT, true);
     FA_SET_BUF_ALLOC(attrs, num, CKA_ID, false);
     FA_SET_BUF_ALLOC(attrs, num, CKA_LABEL, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_ALWAYS_AUTHENTICATE, false);
     ret = p11prov_fetch_attributes(ctx, session, object, attrs, num);
     if (ret != CKR_OK) {
         /* free any allocated memory */
@@ -675,7 +710,26 @@ static CK_RV pre_process_ec_key_data(P11PROV_OBJ *key)
             key->data.key.bit_size = ED448_BIT_SIZE;
             key->data.key.size = ED448_BYTE_SIZE;
         } else {
-            return CKR_KEY_INDIGESTIBLE;
+            const unsigned char *p = attr->pValue;
+            ASN1_OBJECT *asn1_obj = d2i_ASN1_OBJECT(NULL, &p, attr->ulValueLen);
+            if (asn1_obj == NULL) {
+                return CKR_KEY_INDIGESTIBLE;
+            }
+            int nid = OBJ_obj2nid(asn1_obj);
+            ASN1_OBJECT_free(asn1_obj);
+            if (nid == NID_ED25519) {
+                curve_name = ED25519;
+                curve_nid = NID_ED25519;
+                key->data.key.bit_size = ED25519_BIT_SIZE;
+                key->data.key.size = ED25519_BYTE_SIZE;
+            } else if (nid == NID_ED448) {
+                curve_name = ED448;
+                curve_nid = NID_ED448;
+                key->data.key.bit_size = ED448_BIT_SIZE;
+                key->data.key.size = ED448_BYTE_SIZE;
+            } else {
+                return CKR_KEY_INDIGESTIBLE;
+            }
         }
     } else {
         return CKR_KEY_INDIGESTIBLE;
@@ -745,6 +799,7 @@ static CK_RV fetch_ec_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     }
     FA_SET_BUF_ALLOC(attrs, num, CKA_ID, false);
     FA_SET_BUF_ALLOC(attrs, num, CKA_LABEL, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_ALWAYS_AUTHENTICATE, false);
     ret = p11prov_fetch_attributes(ctx, session, object, attrs, num);
     if (ret != CKR_OK) {
         /* free any allocated memory */
@@ -999,6 +1054,9 @@ CK_RV p11prov_obj_find(P11PROV_CTX *provctx, P11PROV_SESSION *session,
             /* unknown object or other recoverable error to ignore */
             continue;
         } else if (ret == CKR_OK) {
+            /* keep a copy of the URI for refreshes as it may contain
+             * things like a PIN necessary to log in */
+            obj->refresh_uri = p11prov_copy_uri(uri);
             ret = cb(cb_ctx, obj);
         }
         if (ret != CKR_OK) {
@@ -1084,11 +1142,86 @@ done:
 
 static void p11prov_obj_refresh(P11PROV_OBJ *obj)
 {
+    int login_behavior;
+    bool login = false;
+    CK_SLOT_ID slotid = CK_UNAVAILABLE_INFORMATION;
+    P11PROV_SESSION *session = NULL;
+    CK_SESSION_HANDLE sess = CK_INVALID_HANDLE;
+    CK_ATTRIBUTE template[3] = { 0 };
+    CK_ATTRIBUTE *attr;
+    int anum;
+    CK_OBJECT_HANDLE handle;
+    CK_ULONG objcount = 0;
     P11PROV_OBJ *tmp = NULL;
-    tmp = find_associated_obj(obj->ctx, obj, obj->class);
-    if (!tmp) {
-        /* nothing we can do, invalid handle it is */
+    CK_RV ret;
+
+    P11PROV_debug("Refresh object %p", obj);
+
+    if (obj->class == CKO_PRIVATE_KEY) {
+        login = true;
+    }
+    login_behavior = p11prov_ctx_login_behavior(obj->ctx);
+    if (login_behavior == PUBKEY_LOGIN_ALWAYS) {
+        login = true;
+    }
+
+    slotid = p11prov_obj_get_slotid(obj);
+
+    ret = p11prov_get_session(obj->ctx, &slotid, NULL, obj->refresh_uri,
+                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, login,
+                              false, &session);
+
+    if (ret != CKR_OK) {
+        P11PROV_debug("Failed to get session to refresh object %p", obj);
         return;
+    }
+
+    sess = p11prov_session_handle(session);
+
+    anum = 0;
+    CKATTR_ASSIGN(template[anum], CKA_CLASS, &(obj->class), sizeof(obj->class));
+    anum++;
+    /* use CKA_ID if available */
+    attr = p11prov_obj_get_attr(obj, CKA_ID);
+    if (attr) {
+        template[anum] = *attr;
+        anum++;
+    }
+    /* use Label if available */
+    attr = p11prov_obj_get_attr(obj, CKA_LABEL);
+    if (attr) {
+        template[anum] = *attr;
+        anum++;
+    }
+
+    ret = p11prov_FindObjectsInit(obj->ctx, sess, template, anum);
+    if (ret != CKR_OK) {
+        goto done;
+    }
+
+    /* we expect a single entry */
+    ret = p11prov_FindObjects(obj->ctx, sess, &handle, 1, &objcount);
+
+    /* Finalizing is not fatal so ignore result */
+    p11prov_FindObjectsFinal(obj->ctx, sess);
+
+    if (ret != CKR_OK || objcount == 0) {
+        P11PROV_raise(obj->ctx, ret,
+                      "Failed to find refresh object %p (count=%ld)", obj,
+                      objcount);
+        goto done;
+    }
+    if (objcount != 1) {
+        P11PROV_raise(obj->ctx, ret,
+                      "Too many objects found on refresh (count=%ld)",
+                      objcount);
+        goto done;
+    }
+
+    ret = p11prov_obj_from_handle(obj->ctx, session, handle, &tmp);
+    if (ret != CKR_OK) {
+        P11PROV_raise(obj->ctx, ret, "Failed to get object from handle");
+        goto done;
     }
 
     /* move over all the object data, then free the tmp */
@@ -1112,6 +1245,9 @@ static void p11prov_obj_refresh(P11PROV_OBJ *obj)
      * cause use-after-free issues */
     p11prov_obj_free(tmp);
     obj->raf = false;
+
+done:
+    p11prov_return_session(session);
 }
 
 #define SECRET_KEY_ATTRS 2
