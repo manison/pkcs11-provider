@@ -1,3 +1,12 @@
+pkcs11-provider (0.3-1) unstable; urgency=medium
+
+  * Mention header copyright holder in d/copyright
+  * Update upstream source from tag 'upstream/0.3' (Closes: #1057937)
+  * Drop patch to disable tests, no longer needed
+  * Bump libssl dependency to 3.0.7
+
+ -- Luca Boccassi <bluca@debian.org>  Mon, 22 Jan 2024 21:32:36 +0000
+
 pkcs11-provider (0.2+g20231107-1) unstable; urgency=medium
 
   * Merge git snapshot from upstream to drop non-DFSG-free headers
