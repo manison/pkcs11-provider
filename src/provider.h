@@ -32,6 +32,7 @@
 #include <openssl/proverr.h>
 #include <openssl/core_names.h>
 #include <openssl/provider.h>
+#include <openssl/ui.h>
 
 #ifndef VLA_DEF
 #define VLA_DEF(name, type, size) type name[size]
@@ -138,6 +139,10 @@ enum p11prov_cache_keys {
 };
 int p11prov_ctx_cache_keys(P11PROV_CTX *ctx);
 int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx);
+
+bool p11prov_ctx_no_operation_state(P11PROV_CTX *ctx);
+
+CK_INFO p11prov_ctx_get_ck_info(P11PROV_CTX *ctx);
 
 #include "debug.h"
 

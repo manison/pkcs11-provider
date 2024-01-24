@@ -141,6 +141,14 @@ static void *p11prov_sig_dupctx(void *ctx)
     newctx->session = sigctx->session;
     sigctx->session = NULL;
 
+    /* NOTE: most tokens will probably return errors trying to do this on sign
+     * sessions. If the configuration indicates that GetOperationState will fail
+     * we don't even try to duplicate the context. */
+
+    if (p11prov_ctx_no_operation_state(sigctx->provctx)) {
+        goto done;
+    }
+
     if (slotid != CK_UNAVAILABLE_INFORMATION && handle != CK_INVALID_HANDLE) {
         CK_SESSION_HANDLE newsess = p11prov_session_handle(newctx->session);
         CK_SESSION_HANDLE sess = CK_INVALID_HANDLE;
@@ -775,6 +783,7 @@ static CK_RV p11prov_sig_operate_init(P11PROV_SIG_CTX *sigctx, bool digest_op,
     CK_SESSION_HANDLE sess;
     CK_SLOT_ID slotid;
     bool reqlogin = false;
+    bool always_auth = false;
     CK_RV ret;
 
     P11PROV_debug("called (sigctx=%p, digest_op=%s)", sigctx,
@@ -832,10 +841,21 @@ static CK_RV p11prov_sig_operate_init(P11PROV_SIG_CTX *sigctx, bool digest_op,
         slotid = p11prov_obj_get_slotid(sigctx->key);
 
         ret = mech_fallback_init(sigctx, slotid);
+        goto done;
         break;
     default:
         P11PROV_raise(sigctx->provctx, ret,
                       "Failed to open session on slot %lu", slotid);
+        goto done;
+    }
+
+    if (reqlogin) {
+        always_auth =
+            p11prov_obj_get_bool(sigctx->key, CKA_ALWAYS_AUTHENTICATE, false);
+    }
+
+    if (always_auth) {
+        ret = p11prov_context_specific_login(session, NULL, NULL, NULL);
     }
 
 done:

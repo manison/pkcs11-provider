@@ -34,6 +34,7 @@ struct p11prov_ctx {
     /* cfg quirks */
     bool no_deinit;
     bool no_allowed_mechanisms;
+    bool no_operation_state;
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -610,6 +611,20 @@ int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx)
 {
     P11PROV_debug("cache_sessions = %d", ctx->cache_sessions);
     return ctx->cache_sessions;
+}
+
+bool p11prov_ctx_no_operation_state(P11PROV_CTX *ctx)
+{
+    return ctx->no_operation_state;
+}
+
+CK_INFO p11prov_ctx_get_ck_info(P11PROV_CTX *ctx)
+{
+    if (!ctx->module) {
+        CK_INFO info = { 0 };
+        return info;
+    }
+    return p11prov_module_ck_info(ctx->module);
 }
 
 static void p11prov_teardown(void *ctx)
@@ -1459,6 +1474,8 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
                 ctx->no_deinit = true;
             } else if (strncmp(str, "no-allowed-mechanisms", toklen) == 0) {
                 ctx->no_allowed_mechanisms = true;
+            } else if (strncmp(str, "no-operation-state", toklen) == 0) {
+                ctx->no_operation_state = true;
             }
             len -= toklen;
             if (sep) {
