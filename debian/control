@@ -6,7 +6,7 @@ Build-Depends: autoconf-archive,
                debhelper-compat (= 13),
                dh-package-notes,
                libssl-dev (>= 3.0.7~),
-               pkg-config,
+               pkgconf,
 Homepage: https://github.com/latchset/pkcs11-provider
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
