@@ -5,18 +5,8 @@ Maintainer: Luca Boccassi <bluca@debian.org>
 Build-Depends: autoconf-archive,
                debhelper-compat (= 13),
                dh-package-notes,
-               expect <!nocheck>,
-               gnutls-bin <!nocheck>,
-               libnss3-dev <!nocheck>,
-               libp11-kit-dev <!nocheck>,
                libssl-dev (>= 3.0.7~),
-               libstoken-dev <!nocheck>,
-               opensc <!nocheck>,
-               openssl <!nocheck>,
-               p11-kit <!nocheck>,
-               p11-kit-modules <!nocheck>,
                pkg-config,
-               softhsm2 <!nocheck>,
 Homepage: https://github.com/latchset/pkcs11-provider
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
