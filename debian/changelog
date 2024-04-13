@@ -1,3 +1,11 @@
+pkcs11-provider (0.3-2) unstable; urgency=medium
+
+  * Disable tests (Closes: #1068657)
+  * Switch to pkgconf
+  * Bump Standards-Version to 4.7.0, no changes
+
+ -- Luca Boccassi <bluca@debian.org>  Sat, 13 Apr 2024 18:31:26 +0100
+
 pkcs11-provider (0.3-1) unstable; urgency=medium
 
   * Mention header copyright holder in d/copyright
