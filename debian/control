@@ -8,7 +8,7 @@ Build-Depends: autoconf-archive,
                libssl-dev (>= 3.0.7~),
                pkgconf,
 Homepage: https://github.com/latchset/pkcs11-provider
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Vcs-Browser: https://salsa.debian.org/debian/pkcs11-provider
 Vcs-Git: https://salsa.debian.org/debian/pkcs11-provider.git
