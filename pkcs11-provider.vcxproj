@@ -107,6 +107,7 @@
   <ItemGroup>
     <ClCompile Include="src\asymmetric_cipher.c" />
     <ClCompile Include="src\debug.c" />
+    <ClCompile Include="src\decoder.c" />
     <ClCompile Include="src\digests.c" />
     <ClCompile Include="src\encoder.c" />
     <ClCompile Include="src\exchange.c" />
@@ -114,6 +115,7 @@
     <ClCompile Include="src\kdf.c" />
     <ClCompile Include="src\keymgmt.c" />
     <ClCompile Include="src\objects.c" />
+    <ClCompile Include="src\pk11_uri.c" />
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\random.c" />
     <ClCompile Include="src\session.c" />
@@ -126,6 +128,7 @@
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
     <ClInclude Include="src\debug.h" />
+    <ClInclude Include="src\decoder.h" />
     <ClInclude Include="src\digests.h" />
     <ClInclude Include="src\encoder.h" />
     <ClInclude Include="src\exchange.h" />
@@ -133,6 +136,7 @@
     <ClInclude Include="src\kdf.h" />
     <ClInclude Include="src\keymgmt.h" />
     <ClInclude Include="src\objects.h" />
+    <ClInclude Include="src\pk11_uri.h" />
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\platform\windows\win_atomic.h" />
     <ClInclude Include="src\platform\windows\win_compat.h" />

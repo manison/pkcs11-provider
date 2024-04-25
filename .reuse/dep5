@@ -6,25 +6,25 @@ Source: https://github.com/latchset/pkcs11-provider/
 #
 # Build system, data files from tests, and misc cruft
 #
-Files: **/Makefile.am
-       .github/*
+Files: .github/*
        .gitignore
-       Makefile.am
+       Makefile
+       meson.build
+       meson_options.txt
        *.md
-       configure.ac
-       configure.ac
-       src/Makefile.am
-       src/provider.exports
+       src/meson.build
+       src/provider.map
        src/*.gen.c
-       tests/Makefile.am
        tests/README
        tests/openssl.cnf.in
        tests/explicit_ec.*
+       tests/meson.build
        .clang-format
        .clang-format-ignore
        packaging/pkcs11-provider.spec
        docs/*
        tests/lsan.supp
+       tools/openssl*.cnf
 Copyright: (C) 2022 Simo Sorce <simo@redhat.com>
 License: Apache-2.0
 

@@ -7,9 +7,11 @@
 /* Slots */
 CK_RV p11prov_init_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots);
 void p11prov_free_slots(P11PROV_SLOTS_CTX *slots);
+#ifndef WIN32
 void p11prov_slot_fork_prepare(P11PROV_SLOTS_CTX *sctx);
 void p11prov_slot_fork_release(P11PROV_SLOTS_CTX *sctx);
 void p11prov_slot_fork_reset(P11PROV_SLOTS_CTX *sctx);
+#endif
 CK_RV p11prov_take_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots);
 void p11prov_return_slots(P11PROV_SLOTS_CTX *slots);
 P11PROV_SLOT *p11prov_fetch_slot(P11PROV_SLOTS_CTX *sctx, int *idx);

@@ -71,6 +71,7 @@
 #define P11PROV_DESCS_ED448 "PKCS11 ED448 Implementation"
 #define P11PROV_NAMES_RAND "PKCS11-RAND"
 #define P11PROV_DESCS_RAND "PKCS11 Random Generator"
+#define P11PROV_NAME_CERTIFICATE "CERTIFICATE"
 
 #define P11PROV_PARAM_URI "pkcs11_uri"
 #define P11PROV_PARAM_KEY_USAGE "pkcs11_key_usage"
@@ -140,7 +141,8 @@ enum p11prov_cache_keys {
 int p11prov_ctx_cache_keys(P11PROV_CTX *ctx);
 int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx);
 
-bool p11prov_ctx_no_operation_state(P11PROV_CTX *ctx);
+bool p11prov_ctx_is_call_blocked(P11PROV_CTX *ctx, uint64_t mask);
+bool p11prov_ctx_no_session_callbacks(P11PROV_CTX *ctx);
 
 CK_INFO p11prov_ctx_get_ck_info(P11PROV_CTX *ctx);
 
@@ -180,6 +182,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 #include "session.h"
 #include "slot.h"
 #include "random.h"
+#include "pk11_uri.h"
 
 /* TLS */
 int tls_group_capabilities(OSSL_CALLBACK *cb, void *arg);

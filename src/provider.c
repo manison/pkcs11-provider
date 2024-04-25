@@ -2,6 +2,7 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#include "decoder.h"
 #include <string.h>
 
 struct p11prov_interface;
@@ -28,13 +29,15 @@ struct p11prov_ctx {
     bool cache_pins;
     int cache_keys;
     int cache_sessions;
+    bool encode_pkey_as_pk11_uri;
     /* TODO: ui_method */
     /* TODO: fork id */
 
     /* cfg quirks */
     bool no_deinit;
     bool no_allowed_mechanisms;
-    bool no_operation_state;
+    bool no_session_callbacks;
+    uint64_t blocked_calls;
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -613,9 +616,14 @@ int p11prov_ctx_cache_sessions(P11PROV_CTX *ctx)
     return ctx->cache_sessions;
 }
 
-bool p11prov_ctx_no_operation_state(P11PROV_CTX *ctx)
+bool p11prov_ctx_is_call_blocked(P11PROV_CTX *ctx, uint64_t mask)
 {
-    return ctx->no_operation_state;
+    return (ctx->blocked_calls & mask) != 0;
+}
+
+bool p11prov_ctx_no_session_callbacks(P11PROV_CTX *ctx)
+{
+    return ctx->no_session_callbacks;
 }
 
 CK_INFO p11prov_ctx_get_ck_info(P11PROV_CTX *ctx)
@@ -1078,6 +1086,25 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
     ADD_ALGO_EXT(EC, encoder,
                  "provider=pkcs11,output=der,structure=SubjectPublicKeyInfo",
                  p11prov_ec_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ED25519, encoder, "provider=pkcs11,output=text",
+                 p11prov_ec_edwards_encoder_text_functions);
+    ADD_ALGO_EXT(ED448, encoder, "provider=pkcs11,output=text",
+                 p11prov_ec_edwards_encoder_text_functions);
+    if (ctx->encode_pkey_as_pk11_uri) {
+        ADD_ALGO_EXT(RSA, encoder,
+                     "provider=pkcs11,output=pem,structure=PrivateKeyInfo",
+                     p11prov_rsa_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(EC, encoder,
+                     "provider=pkcs11,output=pem,structure=PrivateKeyInfo",
+                     p11prov_ec_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ED25519, encoder,
+                     "provider=pkcs11,output=pem,structure=PrivateKeyInfo",
+                     p11prov_ec_edwards_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ED448, encoder,
+                     "provider=pkcs11,output=pem,structure=PrivateKeyInfo",
+                     p11prov_ec_edwards_encoder_priv_key_info_pem_functions);
+    }
+
     TERM_ALGO(encoder);
 
     /* handle random */
@@ -1116,31 +1143,61 @@ static const OSSL_ALGORITHM p11prov_store[] = {
     { NULL, NULL, NULL, NULL },
 };
 
+static const OSSL_ALGORITHM p11prov_decoders[] = {
+    { "DER", "provider=pkcs11,input=pem",
+      p11prov_pem_decoder_p11prov_der_functions },
+    { P11PROV_NAMES_RSA,
+      "provider=pkcs11,input=der,structure=" P11PROV_DER_STRUCTURE,
+      p11prov_der_decoder_p11prov_rsa_functions },
+    { P11PROV_NAMES_EC,
+      "provider=pkcs11,input=der,structure=" P11PROV_DER_STRUCTURE,
+      p11prov_der_decoder_p11prov_ec_functions },
+    { P11PROV_NAMES_ED25519,
+      "provider=pkcs11,input=der,structure=" P11PROV_DER_STRUCTURE,
+      p11prov_der_decoder_p11prov_ed25519_functions },
+    { P11PROV_NAMES_ED448,
+      "provider=pkcs11,input=der,structure=" P11PROV_DER_STRUCTURE,
+      p11prov_der_decoder_p11prov_ed448_functions },
+    { NULL, NULL, NULL }
+};
+
 static const OSSL_ALGORITHM *
 p11prov_query_operation(void *provctx, int operation_id, int *no_cache)
 {
     P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
-    *no_cache = 0;
     switch (operation_id) {
     case OSSL_OP_DIGEST:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_digest;
     case OSSL_OP_KDF:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_kdf;
     case OSSL_OP_RAND:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_random;
     case OSSL_OP_KEYMGMT:
+        *no_cache = 0;
         return p11prov_keymgmt;
     case OSSL_OP_KEYEXCH:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_exchange;
     case OSSL_OP_SIGNATURE:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_signature;
     case OSSL_OP_ASYM_CIPHER:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_asym_cipher;
     case OSSL_OP_ENCODER:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_encoder;
+    case OSSL_OP_DECODER:
+        *no_cache = 0;
+        return p11prov_decoders;
     case OSSL_OP_STORE:
+        *no_cache = 0;
         return p11prov_store;
     }
+    *no_cache = 0;
     return NULL;
 }
 
@@ -1298,17 +1355,24 @@ enum p11prov_cfg_enum {
     P11PROV_CFG_CACHE_KEYS,
     P11PROV_CFG_QUIRKS,
     P11PROV_CFG_CACHE_SESSIONS,
+    P11PROV_CFG_ENCODE_PROVIDER_URI_TO_PEM,
     P11PROV_CFG_SIZE,
 };
 
 static struct p11prov_cfg_names {
     const char *name;
 } p11prov_cfg_names[P11PROV_CFG_SIZE] = {
-    { "pkcs11-module-path" },           { "pkcs11-module-init-args" },
-    { "pkcs11-module-token-pin" },      { "pkcs11-module-allow-export" },
-    { "pkcs11-module-login-behavior" }, { "pkcs11-module-load-behavior" },
-    { "pkcs11-module-cache-pins" },     { "pkcs11-module-cache-keys" },
-    { "pkcs11-module-quirks" },         { "pkcs11-module-cache-sessions" },
+    { "pkcs11-module-path" },
+    { "pkcs11-module-init-args" },
+    { "pkcs11-module-token-pin" },
+    { "pkcs11-module-allow-export" },
+    { "pkcs11-module-login-behavior" },
+    { "pkcs11-module-load-behavior" },
+    { "pkcs11-module-cache-pins" },
+    { "pkcs11-module-cache-keys" },
+    { "pkcs11-module-quirks" },
+    { "pkcs11-module-cache-sessions" },
+    { "pkcs11-module-encode-provider-uri-to-pem" },
 };
 
 int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
@@ -1475,7 +1539,9 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             } else if (strncmp(str, "no-allowed-mechanisms", toklen) == 0) {
                 ctx->no_allowed_mechanisms = true;
             } else if (strncmp(str, "no-operation-state", toklen) == 0) {
-                ctx->no_operation_state = true;
+                ctx->blocked_calls |= P11PROV_BLOCK_GetOperationState;
+            } else if (strncmp(str, "no-session-callbacks", toklen) == 0) {
+                ctx->no_session_callbacks = true;
             }
             len -= toklen;
             if (sep) {
@@ -1515,6 +1581,15 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
         ctx->cache_sessions = MAX_CACHE_SESSIONS;
     }
     P11PROV_debug("Cache Sessions: %d", ctx->cache_sessions);
+
+    if (cfg[P11PROV_CFG_ENCODE_PROVIDER_URI_TO_PEM] != NULL
+        && strcmp(cfg[P11PROV_CFG_ENCODE_PROVIDER_URI_TO_PEM], "true") == 0) {
+        ctx->encode_pkey_as_pk11_uri = true;
+    } else {
+        ctx->encode_pkey_as_pk11_uri = false;
+    }
+    P11PROV_debug("PK11-URI will %sbe written instead of PrivateKeyInfo",
+                  ctx->encode_pkey_as_pk11_uri ? "" : "not ");
 
     /* PAY ATTENTION: do this as the last thing */
     if (cfg[P11PROV_CFG_LOAD_BEHAVIOR] != NULL
