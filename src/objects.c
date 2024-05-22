@@ -796,6 +796,12 @@ static CK_RV fetch_ec_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     FA_SET_BUF_ALLOC(attrs, num, CKA_EC_PARAMS, true);
     if (key->class == CKO_PUBLIC_KEY) {
         FA_SET_BUF_ALLOC(attrs, num, CKA_EC_POINT, true);
+    } else {
+        /* known vendor optimization to avoid storing
+         * EC public key on HSM; can avoid
+         * find_associated_obj later
+         */
+        FA_SET_BUF_ALLOC(attrs, num, CKA_EC_POINT, false);
     }
     FA_SET_BUF_ALLOC(attrs, num, CKA_ID, false);
     FA_SET_BUF_ALLOC(attrs, num, CKA_LABEL, false);
@@ -1864,7 +1870,6 @@ static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
     switch (key_type) {
     case CKK_EC:
         attrs[0].type = CKA_P11PROV_CURVE_NID;
-        nattr = 1;
         rv = get_public_attrs(obj, attrs, 1);
         if (rv != CKR_OK) {
             P11PROV_raise(obj->ctx, rv, "Failed to get EC key curve nid");
@@ -1985,6 +1990,38 @@ int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
         return RET_OSSL_ERR;
     }
+}
+
+int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub)
+{
+    CK_ATTRIBUTE *a;
+
+    P11PROV_debug("get ed pubkey %p", obj);
+
+    if (!obj) {
+        return RET_OSSL_ERR;
+    }
+
+    if (obj->class != CKO_PRIVATE_KEY && obj->class != CKO_PUBLIC_KEY) {
+        P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Invalid Object Class");
+        return RET_OSSL_ERR;
+    }
+
+    if (obj->data.key.type != CKK_EC_EDWARDS) {
+        P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
+        return RET_OSSL_ERR;
+    }
+
+    /* See if we have cached attributes first */
+    a = p11prov_obj_get_attr(obj, CKA_P11PROV_PUB_KEY);
+    if (!a) {
+        return RET_OSSL_ERR;
+    }
+
+    if (pub) {
+        *pub = a;
+    }
+    return RET_OSSL_OK;
 }
 
 int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
@@ -2161,7 +2198,14 @@ static int cmp_public_key_values(P11PROV_OBJ *pub_key1, P11PROV_OBJ *pub_key2)
 
     switch (pub_key1->data.key.type) {
     case CKK_RSA:
+        /* pub_key1 pub_key2 could be CKO_PRIVATE_KEY here but
+         *  nevertheless contain these two attributes
+         */
         ret = cmp_attr(pub_key1, pub_key2, CKA_MODULUS);
+        if (ret == RET_OSSL_ERR) {
+            break;
+        }
+        ret = cmp_attr(pub_key1, pub_key2, CKA_PUBLIC_EXPONENT);
         break;
     case CKK_EC:
     case CKK_EC_EDWARDS:
@@ -2180,9 +2224,14 @@ static int match_public_keys(P11PROV_OBJ *key1, P11PROV_OBJ *key2)
     P11PROV_OBJ *priv_key;
     int ret = RET_OSSL_ERR;
 
-    if (key1->class == CKO_PUBLIC_KEY && key2->class == CKO_PUBLIC_KEY) {
-        /* both keys are public, match directly their public values */
-        return cmp_public_key_values(key1, key2);
+    /* avoid round-trip to HSM if keys have enough
+     * attributes to do the logical comparison
+     * CKK_RSA: MODULUS / PUBLIC_EXPONENT
+     * CKK_EC: EC_POINT
+     */
+    ret = cmp_public_key_values(key1, key2);
+    if (ret != RET_OSSL_ERR) {
+        return ret;
     }
 
     /* one of the keys or both are private */
@@ -2261,10 +2310,6 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
 
     switch (key1->data.key.type) {
     case CKK_RSA:
-        ret = cmp_attr(key1, key2, CKA_PUBLIC_EXPONENT);
-        if (ret != RET_OSSL_OK) {
-            return ret;
-        }
         if (cmp_type & OBJ_CMP_KEY_PRIVATE) {
             /* unfortunately we can't really read private attributes
              * and there is no comparison function int he PKCS11 API.
@@ -2494,11 +2539,21 @@ static CK_RV prep_rsa_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
     return CKR_OK;
 }
 
+/* P-521 ~ 133 bytes, this should suffice */
+#define MAX_EC_PUB_KEY_SIZE 150
 static CK_RV prep_ec_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
                           struct pool_find_ctx *findctx)
 {
     EC_GROUP *group = NULL;
+    EC_POINT *point = NULL;
+    BN_CTX *bn_ctx = NULL;
+    int ret, plen;
+
     OSSL_PARAM tmp;
+    const OSSL_PARAM *p;
+    OSSL_PARAM pub_key[2] = { 0 };
+    uint8_t pub_data[MAX_EC_PUB_KEY_SIZE];
+
     const char *curve_name = NULL;
     int curve_nid;
     unsigned char *ecparams = NULL;
@@ -2510,19 +2565,66 @@ static CK_RV prep_ec_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
     }
     findctx->numattrs = 0;
 
-    rv = param_to_attr(ctx, params, OSSL_PKEY_PARAM_PUB_KEY, &findctx->attrs[0],
-                       CKA_P11PROV_PUB_KEY, false);
-    if (rv != CKR_OK) {
-        return rv;
-    }
-    findctx->numattrs++;
-
     group = EC_GROUP_new_from_params(params, p11prov_ctx_get_libctx(ctx), NULL);
     if (!group) {
         P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unable to decode ec group");
         rv = CKR_KEY_INDIGESTIBLE;
         goto done;
     }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PUB_KEY);
+    if (!p) {
+        P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                      OSSL_PKEY_PARAM_PUB_KEY);
+        EC_GROUP_free(group);
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    /* Providers may export in any format - OpenSSL < 3.0.8
+     * ignores the "point-format" OSSL_PARAM and unconditionally uses
+     * compressed format:
+     * - https://github.com/openssl/openssl/pull/16624
+     * - https://github.com/openssl/openssl/issues/16595
+     *
+     * Convert from compressed to uncompressed if necessary
+     */
+    if (((char *)p->data)[0] == '\x02' || ((char *)p->data)[0] == '\x03') {
+        P11PROV_debug("OpenSSL 3.0.7 BUG - received compressed EC public key");
+        pub_key[0].key = OSSL_PKEY_PARAM_PUB_KEY;
+        pub_key[0].data_type = p->data_type;
+        pub_key[0].data = pub_data;
+
+        point = EC_POINT_new(group);
+        bn_ctx = BN_CTX_new();
+        ret = EC_POINT_oct2point(group, point, p->data, p->data_size, bn_ctx);
+        if (!ret) {
+            goto done0;
+        }
+
+        plen = EC_POINT_point2oct(group, point, POINT_CONVERSION_UNCOMPRESSED,
+                                  pub_key[0].data, MAX_EC_PUB_KEY_SIZE, bn_ctx);
+        if (!plen) {
+            ret = CKR_KEY_INDIGESTIBLE;
+            goto done0;
+        }
+
+        pub_key[0].data_size = plen;
+        ret = param_to_attr(ctx, pub_key, OSSL_PKEY_PARAM_PUB_KEY,
+                            &findctx->attrs[0], CKA_P11PROV_PUB_KEY, false);
+        if (ret != CKR_OK) {
+            goto done0;
+        }
+        EC_POINT_free(point);
+        BN_CTX_free(bn_ctx);
+    } else {
+        rv = param_to_attr(ctx, params, OSSL_PKEY_PARAM_PUB_KEY,
+                           &findctx->attrs[0], CKA_P11PROV_PUB_KEY, false);
+        if (rv != CKR_OK) {
+            return rv;
+        }
+    }
+
+    findctx->numattrs++;
 
     curve_nid = EC_GROUP_get_curve_name(group);
     if (curve_nid != NID_undef) {
@@ -2575,11 +2677,17 @@ static CK_RV prep_ec_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
     findctx->bit_size = EC_GROUP_order_bits(group);
     findctx->key_size = (findctx->bit_size + 7) / 8;
     rv = CKR_OK;
-
 done:
     OPENSSL_free(ecparams);
     EC_GROUP_free(group);
     return rv;
+
+done0:
+
+    EC_GROUP_free(group);
+    EC_POINT_free(point);
+    BN_CTX_free(bn_ctx);
+    return ret;
 }
 
 static CK_RV return_dup_key(P11PROV_OBJ *dst, P11PROV_OBJ *src)
