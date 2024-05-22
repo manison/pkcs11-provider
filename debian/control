@@ -2,10 +2,10 @@ Source: pkcs11-provider
 Section: libs
 Priority: optional
 Maintainer: Luca Boccassi <bluca@debian.org>
-Build-Depends: autoconf-archive,
-               debhelper-compat (= 13),
+Build-Depends: debhelper-compat (= 13),
                dh-package-notes,
                libssl-dev (>= 3.0.7~),
+               meson (>= 0.57~),
                pkgconf,
 Homepage: https://github.com/latchset/pkcs11-provider
 Standards-Version: 4.7.0
