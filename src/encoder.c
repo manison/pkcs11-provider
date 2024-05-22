@@ -2,6 +2,7 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#include "pk11_uri.h"
 #include <openssl/asn1t.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>
@@ -36,6 +37,8 @@ static int p11prov_print_buf(BIO *out, const OSSL_PARAM *p, const char *str,
 
 DISPATCH_BASE_ENCODER_FN(newctx);
 DISPATCH_BASE_ENCODER_FN(freectx);
+
+DISPATCH_ENCODER_FN(common, priv_key_info, pem, does_selection);
 
 struct p11prov_encoder_ctx {
     P11PROV_CTX *provctx;
@@ -463,6 +466,113 @@ const OSSL_DISPATCH p11prov_rsa_encoder_spki_pem_functions[] = {
     { 0, NULL },
 };
 
+static P11PROV_PK11_URI *p11prov_encoder_private_key_to_asn1(P11PROV_CTX *pctx,
+                                                             P11PROV_OBJ *key)
+{
+    P11PROV_PK11_URI *out = NULL;
+    char *uri = NULL;
+    size_t uri_len;
+    int ret = RET_OSSL_ERR;
+
+    uri = p11prov_key_to_uri(pctx, key);
+    if (!uri) {
+        goto done;
+    }
+
+    uri_len = strlen(uri);
+    P11PROV_debug("uri=%s", uri);
+
+    out = P11PROV_PK11_URI_new();
+    if (!out) {
+        goto done;
+    }
+
+    if (!ASN1_STRING_set(out->desc, P11PROV_DESCS_URI_FILE,
+                         sizeof(P11PROV_DESCS_URI_FILE) - 1)) {
+        goto done;
+    }
+    if (!ASN1_STRING_set(out->uri, uri, uri_len)) {
+        goto done;
+    }
+
+    ret = RET_OSSL_OK;
+
+done:
+    OPENSSL_free(uri);
+    if (ret != RET_OSSL_OK) {
+        P11PROV_PK11_URI_free(out);
+        out = NULL;
+    }
+    return out;
+}
+
+static int p11prov_encoder_private_key_write_pem(
+    CK_KEY_TYPE expected_key_type, void *inctx, OSSL_CORE_BIO *cbio,
+    const void *inkey, const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    struct p11prov_encoder_ctx *ctx = (struct p11prov_encoder_ctx *)inctx;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)inkey;
+    CK_KEY_TYPE key_type;
+    P11PROV_PK11_URI *asn1 = NULL;
+    BIO *out = NULL;
+    int ret;
+
+    key_type = p11prov_obj_get_key_type(key);
+    if (key_type != expected_key_type) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR,
+                      "Key type mismatch (actual:%lu,expected:%lu)", key_type,
+                      expected_key_type);
+        ret = RET_OSSL_ERR;
+        goto done;
+    }
+
+    asn1 = p11prov_encoder_private_key_to_asn1(ctx->provctx, key);
+    if (!asn1) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR,
+                      "Failed to encode private key");
+        ret = RET_OSSL_ERR;
+        goto done;
+    }
+
+    out = BIO_new_from_core_bio(p11prov_ctx_get_libctx(ctx->provctx), cbio);
+    if (!out) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Failed to init BIO");
+        ret = RET_OSSL_ERR;
+        goto done;
+    }
+
+    ret = PEM_write_bio_P11PROV_PK11_URI(out, asn1);
+    if (ret != RET_OSSL_OK) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR,
+                      "Failed to write BIO PEM");
+        goto done;
+    }
+
+done:
+    P11PROV_PK11_URI_free(asn1);
+    BIO_free(out);
+    return ret;
+}
+
+static int p11prov_rsa_encoder_priv_key_info_pem_encode(
+    void *inctx, OSSL_CORE_BIO *cbio, const void *inkey,
+    const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    return p11prov_encoder_private_key_write_pem(
+        CKK_RSA, inctx, cbio, inkey, key_abstract, selection, cb, cbarg);
+}
+
+const OSSL_DISPATCH p11prov_rsa_encoder_priv_key_info_pem_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_ENCODER_ELEM(DOES_SELECTION, common, priv_key_info, pem,
+                          does_selection),
+    DISPATCH_ENCODER_ELEM(ENCODE, rsa, priv_key_info, pem, encode),
+    { 0, NULL },
+};
+
 /* ECDSA */
 
 struct ecdsa_key_point {
@@ -800,5 +910,123 @@ const OSSL_DISPATCH p11prov_ec_encoder_text_functions[] = {
     DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
     DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
     DISPATCH_TEXT_ENCODER_ELEM(ENCODE, ec, encode_text),
+    { 0, NULL },
+};
+
+static int p11prov_ec_encoder_priv_key_info_pem_encode(
+    void *inctx, OSSL_CORE_BIO *cbio, const void *inkey,
+    const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    return p11prov_encoder_private_key_write_pem(
+        CKK_EC, inctx, cbio, inkey, key_abstract, selection, cb, cbarg);
+}
+
+const OSSL_DISPATCH p11prov_ec_encoder_priv_key_info_pem_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_ENCODER_ELEM(DOES_SELECTION, common, priv_key_info, pem,
+                          does_selection),
+    DISPATCH_ENCODER_ELEM(ENCODE, ec, priv_key_info, pem, encode),
+    { 0, NULL },
+};
+
+static int p11prov_ec_edwards_encoder_priv_key_info_pem_encode(
+    void *inctx, OSSL_CORE_BIO *cbio, const void *inkey,
+    const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    return p11prov_encoder_private_key_write_pem(
+        CKK_EC_EDWARDS, inctx, cbio, inkey, key_abstract, selection, cb, cbarg);
+}
+
+const OSSL_DISPATCH p11prov_ec_edwards_encoder_priv_key_info_pem_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_ENCODER_ELEM(DOES_SELECTION, common, priv_key_info, pem,
+                          does_selection),
+    DISPATCH_ENCODER_ELEM(ENCODE, ec_edwards, priv_key_info, pem, encode),
+    { 0, NULL },
+};
+
+static int
+p11prov_common_encoder_priv_key_info_pem_does_selection(void *inctx,
+                                                        int selection)
+{
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        return RET_OSSL_OK;
+    }
+    return RET_OSSL_ERR;
+}
+
+DISPATCH_TEXT_ENCODER_FN(ec_edwards, encode);
+
+static int p11prov_ec_edwards_encoder_encode_text(
+    void *inctx, OSSL_CORE_BIO *cbio, const void *inkey,
+    const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    struct p11prov_encoder_ctx *ctx = (struct p11prov_encoder_ctx *)inctx;
+    P11PROV_OBJ *key = (P11PROV_OBJ *)inkey;
+    CK_KEY_TYPE type;
+    CK_ULONG keysize;
+    const char *type_name = "ED25519";
+    char *uri = NULL;
+    BIO *out;
+    int ret;
+
+    P11PROV_debug("EdDSA Text Encoder");
+
+    type = p11prov_obj_get_key_type(key);
+    if (type != CKK_EC_EDWARDS) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Invalid Key Type");
+        return RET_OSSL_ERR;
+    }
+
+    out = BIO_new_from_core_bio(p11prov_ctx_get_libctx(ctx->provctx), cbio);
+    if (!out) {
+        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Failed to init BIO");
+        return RET_OSSL_ERR;
+    }
+
+    keysize = p11prov_obj_get_key_bit_size(key);
+    if (keysize == 448) {
+        type_name = "ED448";
+    }
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
+        if (class != CKO_PRIVATE_KEY) {
+            return RET_OSSL_ERR;
+        }
+        BIO_printf(out, "PKCS11 %s Private Key (%lu bits)\n", type_name,
+                   keysize);
+        BIO_printf(out, "[Can't export and print private key data]\n");
+    }
+
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        BIO_printf(out, "PKCS11 %s Public Key (%lu bits)\n", type_name,
+                   keysize);
+        ret = p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true,
+                                            p11prov_ec_print_public_key, out);
+        /* FIXME if we want print in different format */
+        if (ret != RET_OSSL_OK) {
+            BIO_printf(out, "[Error: Failed to decode public key data]\n");
+        }
+    }
+
+    uri = p11prov_key_to_uri(ctx->provctx, key);
+    if (uri) {
+        BIO_printf(out, "URI %s\n", uri);
+    }
+
+    OPENSSL_free(uri);
+    BIO_free(out);
+    return RET_OSSL_OK;
+}
+
+const OSSL_DISPATCH p11prov_ec_edwards_encoder_text_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_TEXT_ENCODER_ELEM(ENCODE, ec_edwards, encode_text),
     { 0, NULL },
 };

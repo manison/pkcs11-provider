@@ -2,28 +2,32 @@
 name: Coverity Scan
 
 on:
-  push:
+  pull_request_target:
     branches: ["main"]
+    types:
+      - labeled
   schedule:
     - cron: '41 3 * * 0'
 
 jobs:
-  coverity:
-    name: Coverity Scan
+  scheduled:
+    if: ${{ github.event_name == 'schedule' }}
+    name: Recurrent Coverity Scan
     runs-on: ubuntu-22.04
     container: fedora:latest
     steps:
       - name: Install Dependencies
         run: |
-            dnf -y install git gcc automake libtool pkgconf-pkg-config \
-                autoconf-archive openssl-devel openssl \
+            dnf -y install git gcc meson pkgconf-pkg-config \
+                openssl-devel openssl \
                 nss-softokn nss-tools nss-softokn-devel
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Setup
         run: |
-          autoreconf -fiv
-          ./configure
+          meson setup builddir
+        env:
+          CC: gcc
       - name: Check for changes
         run: |
             echo "RUN_COV=0" >> $GITHUB_ENV;
@@ -40,3 +44,48 @@ jobs:
           project: "PKCS%2311+Provider"
           email: ${{ secrets.COVERITY_SCAN_EMAIL }}
           token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+
+  on-labeled-pr:
+    if: ${{ contains(github.event.*.labels.*.name, 'covscan') }}
+    name: Coverity Scan on PR
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    container: fedora:latest
+    steps:
+      - name: Install Dependencies
+        run: |
+            dnf -y install git gcc meson pkgconf-pkg-config \
+                openssl-devel openssl \
+                nss-softokn nss-tools nss-softokn-devel \
+                gh
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{github.event.pull_request.head.sha}}
+      - name: Setup
+        run: |
+          meson setup builddir
+        env:
+          CC: gcc
+      - name: Coverity Scan
+        uses: vapier/coverity-scan-action@v1
+        with:
+          project: "PKCS%2311+Provider"
+          email: ${{ secrets.COVERITY_SCAN_EMAIL }}
+          token: ${{ secrets.COVERITY_SCAN_TOKEN }}
+      - name: Remove Label
+        if: always()
+        run: gh pr edit "$NUMBER" --remove-label "covscan"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.number }}
+
+  on-no-covscan-labeled-pr:
+    if: ${{ contains(github.event.*.labels.*.name, 'no-covscan') }}
+    name: Coverity Scan on PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Coverity Scan not needed
+        run: echo "Dummy action to report all ok and mark covscan as handled"

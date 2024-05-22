@@ -11,7 +11,7 @@ title LINE "Print ED25519 Public key from private"
 ossl 'pkey -in $EDPRIURI -pubout -text' $helper_emit
 output="$helper_output"
 FAIL=0
-echo "$output" | grep "ED25519 Public-Key" > /dev/null 2>&1 || FAIL=1
+echo "$output" | grep "ED25519 Public Key" > /dev/null 2>&1 || FAIL=1
 if [ $FAIL -eq 1 ]; then
     echo "Could not extract public key from private"
     echo
@@ -38,5 +38,27 @@ ossl '
 req -new -batch -key "${EDPRIURI}" -out ${TMPPDIR}/ed25519_csr.pem'
 ossl '
 req -in ${TMPPDIR}/ed25519_csr.pem -verify -noout'
+
+title PARA "Test EVP_PKEY_eq on public Edwards key both on token"
+$CHECKER "${TESTBLDDIR}/tcmpkeys" "$EDPUBURI" "$EDPUBURI"
+
+title PARA "Test EVP_PKEY_eq on public ED key via import"
+$CHECKER "${TESTBLDDIR}/tcmpkeys" "$EDPUBURI" "${TMPPDIR}"/edout.pub
+title PARA "Match private ED key against public key"
+$CHECKER "${TESTBLDDIR}/tcmpkeys" "$EDPRIURI" "${TMPPDIR}"/edout.pub
+title PARA "Match private ED key against public key (commutativity)"
+$CHECKER "${TESTBLDDIR}/tcmpkeys" "${TMPPDIR}"/edout.pub "$EDPRIURI"
+
+title PARA "Test Key generation"
+output=$("${TESTBLDDIR}"/tgenkey "ED25519" 2>&1 || true)
+FAIL=0
+echo "$output" | grep "Performed tests: 1" || FAIL=1
+if [ $FAIL -ne 0 ]; then
+    echo
+    echo "Original command output:"
+    echo "$output"
+    echo
+    exit 1
+fi
 
 exit 0

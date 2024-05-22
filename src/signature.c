@@ -141,18 +141,13 @@ static void *p11prov_sig_dupctx(void *ctx)
     newctx->session = sigctx->session;
     sigctx->session = NULL;
 
-    /* NOTE: most tokens will probably return errors trying to do this on sign
-     * sessions. If the configuration indicates that GetOperationState will fail
-     * we don't even try to duplicate the context. */
-
-    if (p11prov_ctx_no_operation_state(sigctx->provctx)) {
-        goto done;
-    }
-
     if (slotid != CK_UNAVAILABLE_INFORMATION && handle != CK_INVALID_HANDLE) {
         CK_SESSION_HANDLE newsess = p11prov_session_handle(newctx->session);
         CK_SESSION_HANDLE sess = CK_INVALID_HANDLE;
 
+        /* NOTE: most tokens will probably return errors trying to do this on
+         * sign sessions. If GetOperationState fails we don't try to duplicate
+         * the context and just return. */
         ret = p11prov_GetOperationState(sigctx->provctx, newsess, NULL_PTR,
                                         &state_len);
         if (ret != CKR_OK) {
@@ -882,6 +877,9 @@ static CK_RV p11prov_sig_operate(P11PROV_SIG_CTX *sigctx, unsigned char *sig,
         if (sigctx->operation == CKF_VERIFY) {
             return CKR_ARGUMENTS_BAD;
         }
+        if (siglen == NULL) {
+            return CKR_ARGUMENTS_BAD;
+        }
         return p11prov_sig_get_sig_size(sigctx, siglen);
     }
 
@@ -1045,6 +1043,9 @@ static int p11prov_sig_digest_final(P11PROV_SIG_CTX *sigctx, unsigned char *sig,
 
     if (sig == NULL) {
         if (sigctx->operation == CKF_VERIFY) {
+            goto done;
+        }
+        if (siglen == NULL) {
             goto done;
         }
         ret = p11prov_sig_get_sig_size(sigctx, siglen);
@@ -1873,7 +1874,7 @@ static int p11prov_ecdsa_digest_sign_final(void *ctx, unsigned char *sig,
 {
     P11PROV_SIG_CTX *sigctx = (P11PROV_SIG_CTX *)ctx;
     unsigned char raw[P11PROV_MAX_RAW_ECC_SIG_SIZE];
-    size_t rawlen;
+    size_t rawlen = 0;
     int ret;
 
     /* the siglen might be uninitialized when called from openssl */

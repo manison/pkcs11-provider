@@ -16,7 +16,9 @@ static void ossl_err_print(void)
         const char *file, *func, *data;
         int line;
         err = ERR_get_error_all(&file, &line, &func, &data, NULL);
-        if (err == 0) break;
+        if (err == 0) {
+            break;
+        }
 
         char buf[1024];
         ERR_error_string_n(err, buf, sizeof(buf));
@@ -28,7 +30,9 @@ static void ossl_err_print(void)
 
         first = false;
     }
-    if (first) fprintf(stderr, "\n");
+    if (first) {
+        fprintf(stderr, "\n");
+    }
 }
 
 static EVP_PKEY *load_key(const char *uri)
@@ -42,6 +46,16 @@ static EVP_PKEY *load_key(const char *uri)
         fprintf(stderr, "Failed to open store: %s\n", uri);
         ossl_err_print();
         exit(EXIT_FAILURE);
+    }
+
+    if (strncmp(uri, "pkcs11:", 7) && strstr(uri, "type=private") == NULL) {
+        /* This is a workaround for OpenSSL < 3.2.0 where the code fails
+         * to correctly source public keys unless explicitly requested
+         * via an expect hint */
+        if (OSSL_STORE_expect(store, OSSL_STORE_INFO_PUBKEY) != 1) {
+            fprintf(stderr, "Failed to expect Public Key File\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     for (info = OSSL_STORE_load(store); info != NULL;
