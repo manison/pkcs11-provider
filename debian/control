@@ -7,6 +7,16 @@ Build-Depends: debhelper-compat (= 13),
                libssl-dev (>= 3.0.7~),
                meson (>= 0.57~),
                pkgconf,
+               expect <!nocheck>,
+               gnutls-bin <!nocheck>,
+               libnss3-dev <!nocheck>,
+               libp11-kit-dev <!nocheck>,
+               libstoken-dev <!nocheck>,
+               opensc <!nocheck>,
+               openssl <!nocheck>,
+               p11-kit <!nocheck>,
+               p11-kit-modules <!nocheck>,
+               softhsm2 <!nocheck>,
 Homepage: https://github.com/latchset/pkcs11-provider
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
