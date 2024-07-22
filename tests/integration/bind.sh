@@ -12,16 +12,9 @@ PKCS11_DEBUG_FILE="${WORKDIR}/pkcs11-bind-test.log"
 
 install_dependencies()
 {
-    title PARA "Install dependencies" 
+    title PARA "Install dependencies"
 
-    FEDORA_VERSION=$(rpm -q --qf "%{V}" fedora-release-common)
-    if [ "$FEDORA_VERSION" -lt 39 ]; then
-        echo "ERROR: This test requires at least Fedora 39!"
-        exit 1
-    elif [ "$FEDORA_VERSION" -eq 39 ]; then
-        releasever="--releasever=40"
-    fi
-    dnf install -y "$releasever" --skip-broken \
+    dnf install -y --skip-broken \
         meson \
         p11-kit httpd mod_ssl openssl-devel gnutls-utils nss-tools \
         p11-kit-devel p11-kit-server opensc softhsm-devel procps-ng \
@@ -29,9 +22,9 @@ install_dependencies()
 }
 
 softhsm_token_setup()
-{    
+{
     title PARA "Softhsm token setup"
-    
+
     cp -rnp /var/lib/softhsm/tokens{,.bck}
     export PKCS11_PROVIDER_MODULE="/usr/lib64/pkcs11/libsofthsm2.so"
     softhsm2-util --init-token --free --label softhsm --pin $PIN --so-pin $PIN
@@ -134,7 +127,7 @@ bind_test()
         cat "$K" >>localhost
     done
     test -s "${PKCS11_DEBUG_FILE}".extract
-    
+
     title PARA "Test 2: Sign zone"
     PKCS11_PROVIDER_DEBUG=file:${PKCS11_DEBUG_FILE}.sign \
     OPENSSL_CONF=openssl.cnf \

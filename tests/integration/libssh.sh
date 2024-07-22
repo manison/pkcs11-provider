@@ -11,13 +11,13 @@ PKCS11_DEBUG_FILE="${WORKDIR}/pkcs11-libssh-test.log"
 
 install_dependencies()
 {
-    title PARA "Install dependencies" 
-    
+    title PARA "Install dependencies"
+
     dnf install -y --skip-broken cmake libcmocka libcmocka-devel softhsm \
       nss-tools gnutls-utils p11-kit p11-kit-devel p11-kit-server opensc \
       softhsm-devel socket_wrapper nss_wrapper uid_wrapper pam_wrapper \
       priv_wrapper openssh-server zlib-devel git meson \
-      openssl-devel gcc g++ libcmocka-devel 
+      openssl-devel gcc g++ libcmocka-devel
 }
 
 pkcs11_provider_setup()
@@ -47,7 +47,7 @@ pkcs11_provider_setup()
 
 libssh_setup()
 {
-    title PRAM "Clone, setup and build libssh"
+    title PARA "Clone, setup and build libssh"
 
     git clone https://gitlab.com/libssh/libssh-mirror.git \
       "${WORKDIR}"/libssh-mirror
@@ -61,13 +61,13 @@ libssh_setup()
       -DWITH_PKCS11_URI=ON \
       -DWITH_PKCS11_PROVIDER=ON \
       -DPKCS11_PROVIDER="${PKCS11_MODULE}" ..
-    make
+    make -j "$(nproc)"
     popd
 }
 
 libssh_test()
 {
-    title PARAM "Run libssh pkcs11 tests"
+    title PARA "Run libssh pkcs11 tests"
 
     pushd "${WORKDIR}"/libssh-mirror/build
     PKCS11_PROVIDER_DEBUG=file:$PKCS11_DEBUG_FILE ctest \
@@ -76,7 +76,7 @@ libssh_test()
      | tee testout.log 2>&1
     grep -q "100% tests passed, 0 tests failed out of 3" testout.log
     test -s "$PKCS11_DEBUG_FILE"
-   
+
     echo "Test passed"
     popd
 }
