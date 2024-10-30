@@ -7,6 +7,9 @@
 /* Set the base to Vendor + 'OPP' for OpenSSL PKCS11 Provider */
 #define CKA_P11PROV_BASE CKA_VENDOR_DEFINED + 0x4F5050
 
+/* Special value for "imported key handle" */
+#define CK_P11PROV_IMPORTED_HANDLE (CK_UNAVAILABLE_INFORMATION - 1)
+
 /* Objects */
 CK_RV p11prov_obj_pool_init(P11PROV_CTX *ctx, CK_SLOT_ID id,
                             P11PROV_OBJ_POOL **_pool);
@@ -49,6 +52,7 @@ CK_RV p11prov_obj_set_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                                  P11PROV_OBJ *obj, CK_ATTRIBUTE *template,
                                  CK_ULONG tsize);
 const char *p11prov_obj_get_ec_group_name(P11PROV_OBJ *obj);
+bool p11prov_obj_get_ec_compressed(P11PROV_OBJ *obj);
 int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
                                   bool search_related, OSSL_CALLBACK *cb_fn,
                                   void *cb_arg);
@@ -56,6 +60,8 @@ int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
                                   CK_ATTRIBUTE **pub_y);
 int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub);
 CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key);
+P11PROV_OBJ *mock_pub_ec_key(P11PROV_CTX *ctx, CK_ATTRIBUTE_TYPE type,
+                             CK_ATTRIBUTE *ec_params);
 
 #define OBJ_CMP_KEY_TYPE 0x00
 #define OBJ_CMP_KEY_PUBLIC 0x01

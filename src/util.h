@@ -59,9 +59,9 @@ void p11prov_uri_free(P11PROV_URI *parsed_uri);
 CK_OBJECT_CLASS p11prov_uri_get_class(P11PROV_URI *uri);
 void p11prov_uri_set_class(P11PROV_URI *uri, CK_OBJECT_CLASS class);
 CK_ATTRIBUTE p11prov_uri_get_id(P11PROV_URI *uri);
-void p11prov_uri_set_id(P11PROV_URI *uri, CK_ATTRIBUTE *id);
+CK_RV p11prov_uri_set_id(P11PROV_URI *uri, CK_ATTRIBUTE *id);
 CK_ATTRIBUTE p11prov_uri_get_label(P11PROV_URI *uri);
-void p11prov_uri_set_label(P11PROV_URI *uri, CK_ATTRIBUTE *label);
+CK_RV p11prov_uri_set_label(P11PROV_URI *uri, CK_ATTRIBUTE *label);
 char *p11prov_uri_get_serial(P11PROV_URI *uri);
 char *p11prov_uri_get_pin(P11PROV_URI *uri);
 CK_SLOT_ID p11prov_uri_get_slot_id(P11PROV_URI *uri);
@@ -131,12 +131,22 @@ static inline void constant_select_buf(CK_ULONG cond, CK_ULONG size,
                                        unsigned char *dst, unsigned char *a,
                                        unsigned char *b)
 {
-    for (int i = 0; i < size; i++) {
+    for (CK_ULONG i = 0; i < size; i++) {
         volatile unsigned char A = a[i];
         volatile unsigned char B = b[i];
         volatile unsigned char mask = -(unsigned char)cond;
         dst[i] = ((A & mask) | (B & ~mask));
     }
 }
+
+struct data_buffer {
+    uint8_t *data;
+    size_t length;
+};
+typedef struct data_buffer data_buffer;
+
+CK_RV p11prov_digest_util(P11PROV_CTX *provctx, const char *digest,
+                          const char *properties, data_buffer data[],
+                          data_buffer *output);
 
 #endif /* _UTIL_H */

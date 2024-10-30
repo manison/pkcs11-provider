@@ -14,9 +14,9 @@ NAME=${BNAME%.*}
 TEST_NAME=${NAME%-*}
 TOKEN_DRIVER=${NAME#*-}
 
-if [ -f "${TESTBLDDIR}/tmp.${TOKEN_DRIVER}/testvars" ]; then
+if [ -f "${TESTBLDDIR}/${TOKEN_DRIVER}/testvars" ]; then
     # shellcheck source=/dev/null # we do not care about linting this source
-    source "${TESTBLDDIR}/tmp.${TOKEN_DRIVER}/testvars"
+    source "${TESTBLDDIR}/${TOKEN_DRIVER}/testvars"
 else
     exit 77 # token not configured, skip
 fi
@@ -41,16 +41,10 @@ if [ -f "${TEST_PATH}/t${TEST_NAME}.c" ]; then
     COMMAND="$CHECKER $COMMAND"
 fi
 
-for option in "${TEST_PARAMS[@]}"; do
-    if [[ "$option" == "proxy" ]]; then
-        COMMAND="${TESTSSRCDIR}/softhsm-proxy.sh $COMMAND"
-    fi
-done
-
 LOGFILE="${TESTBLDDIR}/${TEST_NAME}.${TOKEN_DRIVER}.log"
 
 echo "Executing ${COMMAND}"
 (
   set -o pipefail
-  ${COMMAND} | tee "${LOGFILE}"
+  ${COMMAND} 2>&1 | tee "${LOGFILE}"
 )

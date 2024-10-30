@@ -19,7 +19,7 @@ install_dependencies()
     dnf install -y --skip-broken \
         meson \
         p11-kit httpd mod_ssl openssl-devel gnutls-utils nss-tools \
-        p11-kit-devel p11-kit-server opensc softhsm-devel procps-ng \
+        p11-kit-devel opensc softhsm-devel procps-ng \
         openssl util-linux
 }
 
@@ -100,7 +100,6 @@ openssl_setup()
       -e "s|\(default = default_sect\)|\1\npkcs11 = pkcs11_sect\n|" \
       -e "s|\(\[default_sect\]\)|\[pkcs11_sect\]\n\1|" \
       -e "s|\(\[default_sect\]\)|module = $PKCS11_MODULE\n\1|" \
-      -e "s|\(\[default_sect\]\)|pkcs11-module-load-behavior = early\n\1|" \
       -e "s|\(\[default_sect\]\)|pkcs11-module-token-pin = file:$PIN_FILE\n\1|" \
       -e "s|\(\[default_sect\]\)|activate = 1\n\n\1|" \
       /etc/pki/tls/openssl.cnf >"${WORKDIR}"/openssl.cnf

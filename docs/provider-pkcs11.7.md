@@ -194,6 +194,11 @@ Some implementatations of PKCS11 don't allow setting `pApplication` and
 `Notify` callback functions in `C_OpenSession`.
 This option sets NULL values for both callbacks.
 
+### no-allowed-mechanisms
+Some implementatations of PKCS11 don't support `CKA_ALLOWED_MECHANISMS`
+attribute on keys. Setting this quirk prevents the provider from
+attempting to set and read this attribute.
+
 Default: none
 
 Example:
@@ -251,6 +256,34 @@ Examples:
 ```PKCS11_PROVIDER_DEBUG=file:/tmp/debug.log```
 
 ```PKCS11_PROVIDER_DEBUG=file:/dev/stderr,level:2```
+
+
+USE IN OLDER APPLICATIONS (URIs in PEM files)
+=============================================
+
+It is strongly suggested to update applications to use the new
+OSSL_STORE API provided by OpenSSL 3.0 which accepts URIs to
+transparenly load keys from either files or any other supported
+mechanism including PKCS#11 URIs.
+
+However, for those applications that cannot yet be changed, there is
+tool to generate a "wrapper" PEM file that contains the PKCS#11 URI
+needed to identify a key on the a token.
+
+This PEM file can be loaded via the clasic methods used to parse
+PEM/DER representations of keys and will trigger the use of the
+pkcs11-provider decoders when the provider is loaded. An error will be
+returned if the provider is not pre-loaded or an older version of
+OpenSSL is used.
+
+In tools/uri2pem.py there is a sample python script that can take a key
+URI and produce a PEM file that references it. Note that storing PINs
+within these PEM files is not secure. These files are not encrypted.
+
+The follwing command can be used to list all keys on a token and print
+their identifying URI:
+
+    openssl storeutl -keys -text pkcs11:
 
 
 EXAMPLES
