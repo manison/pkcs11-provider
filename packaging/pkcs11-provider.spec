@@ -2,7 +2,7 @@
 %bcond_with gpgcheck
 
 Name:          pkcs11-provider
-Version:       0.5
+Version:       0.6
 Release:       %autorelease
 Summary:       A PKCS#11 provider for OpenSSL 3.0+
 License:       Apache-2.0
@@ -29,7 +29,6 @@ BuildRequires: openssl
 BuildRequires: softhsm
 BuildRequires: opensc
 BuildRequires: p11-kit-devel
-BuildRequires: p11-kit-server
 BuildRequires: gnutls-utils
 BuildRequires: xz
 BuildRequires: expect

@@ -39,6 +39,7 @@ struct p11prov_ctx {
     bool no_allowed_mechanisms;
     bool no_session_callbacks;
     uint64_t blocked_calls;
+    bool blocked_ops[OSSL_OP__HIGHEST + 1];
 
     /* module handles and data */
     P11PROV_MODULE *module;
@@ -218,6 +219,12 @@ static void context_rm_pool(struct p11prov_ctx *ctx)
     }
     if (found) {
         ctx_pool.num--;
+        if (ctx_pool.num == 0) {
+            /* This was the last context, free ctx_pool.contexts to avoid
+             * leaking memory. */
+            OPENSSL_free(ctx_pool.contexts);
+            ctx_pool.contexts = NULL;
+        }
     } else {
         P11PROV_debug("Context not found in pool ?!");
     }
@@ -984,6 +991,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 break;
             case CKM_HKDF_DERIVE:
                 ADD_ALGO(HKDF, hkdf, kdf);
+                ADD_ALGO(TLS13_KDF, tls13, kdf);
                 ADD_ALGO(HKDF, hkdf, exchange);
                 UNCHECK_MECHS(CKM_HKDF_DERIVE);
                 break;
@@ -1176,10 +1184,39 @@ static const OSSL_ALGORITHM p11prov_decoders[] = {
     { NULL, NULL, NULL }
 };
 
+static const char *p11prov_block_ops_names[OSSL_OP__HIGHEST + 1] = {
+    [OSSL_OP_DIGEST] = "digest",
+    [OSSL_OP_CIPHER] = "cipher",
+    [OSSL_OP_MAC] = "mac",
+    [OSSL_OP_KDF] = "kdf",
+    [OSSL_OP_RAND] = "rand",
+    [OSSL_OP_KEYMGMT] = "keymgmt",
+    [OSSL_OP_KEYEXCH] = "keyexch",
+    [OSSL_OP_SIGNATURE] = "signature",
+    [OSSL_OP_ASYM_CIPHER] = "asym-cipher",
+    [OSSL_OP_KEM] = "kem",
+    [OSSL_OP_ENCODER] = "encoder",
+    [OSSL_OP_DECODER] = "decoder",
+    [OSSL_OP_STORE] = "store",
+};
+
 static const OSSL_ALGORITHM *
 p11prov_query_operation(void *provctx, int operation_id, int *no_cache)
 {
     P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+
+    if (operation_id > OSSL_OP__HIGHEST) {
+        P11PROV_debug("Invalid op id %d > OSSL_OP__HIGHEST", operation_id);
+        *no_cache = 0;
+        return NULL;
+    }
+    if (ctx->blocked_ops[operation_id]) {
+        P11PROV_debug("Blocked operation: %s (%d)",
+                      p11prov_block_ops_names[operation_id], operation_id);
+        *no_cache = 0;
+        return NULL;
+    }
+
     switch (operation_id) {
     case OSSL_OP_DIGEST:
         *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
@@ -1371,6 +1408,7 @@ enum p11prov_cfg_enum {
     P11PROV_CFG_QUIRKS,
     P11PROV_CFG_CACHE_SESSIONS,
     P11PROV_CFG_ENCODE_PROVIDER_URI_TO_PEM,
+    P11PROV_CFG_BLOCK_OPS,
     P11PROV_CFG_SIZE,
 };
 
@@ -1388,6 +1426,7 @@ static struct p11prov_cfg_names {
     { "pkcs11-module-quirks" },
     { "pkcs11-module-cache-sessions" },
     { "pkcs11-module-encode-provider-uri-to-pem" },
+    { "pkcs11-module-block-operations" },
 };
 
 int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
@@ -1396,6 +1435,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
     const char *cfg[P11PROV_CFG_SIZE] = { 0 };
     OSSL_PARAM core_params[P11PROV_CFG_SIZE + 1];
     P11PROV_CTX *ctx;
+    bool show_quirks = false;
     int ret;
 
     *provctx = NULL;
@@ -1550,12 +1590,16 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
                 toklen = len;
             }
             if (strncmp(str, "no-deinit", toklen) == 0) {
+                show_quirks = true;
                 ctx->no_deinit = true;
             } else if (strncmp(str, "no-allowed-mechanisms", toklen) == 0) {
+                show_quirks = true;
                 ctx->no_allowed_mechanisms = true;
             } else if (strncmp(str, "no-operation-state", toklen) == 0) {
+                show_quirks = true;
                 ctx->blocked_calls |= P11PROV_BLOCK_GetOperationState;
             } else if (strncmp(str, "no-session-callbacks", toklen) == 0) {
+                show_quirks = true;
                 ctx->no_session_callbacks = true;
             }
             len -= toklen;
@@ -1567,13 +1611,19 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
             }
         }
     }
-    if (ctx->no_deinit || ctx->no_allowed_mechanisms) {
+    if (show_quirks) {
         P11PROV_debug("Quirks:");
         if (ctx->no_deinit) {
             P11PROV_debug(" No finalization on de-initialization");
         }
         if (ctx->no_allowed_mechanisms) {
             P11PROV_debug(" No CKA_ALLOWED_MECHANISM use");
+        }
+        if (ctx->no_session_callbacks) {
+            P11PROV_debug(" No session callbacks");
+        }
+        if (ctx->blocked_calls) {
+            P11PROV_debug(" Blocked calls: [%08lx]", ctx->blocked_calls);
         }
     } else {
         P11PROV_debug("No quirks");
@@ -1605,6 +1655,48 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle, const OSSL_DISPATCH *in,
     }
     P11PROV_debug("PK11-URI will %sbe written instead of PrivateKeyInfo",
                   ctx->encode_pkey_as_pk11_uri ? "" : "not ");
+
+    if (cfg[P11PROV_CFG_BLOCK_OPS] != NULL) {
+        const char *str;
+        const char *sep;
+        size_t len = strlen(cfg[P11PROV_CFG_BLOCK_OPS]);
+        size_t tokl;
+        bool match = false;
+
+        P11PROV_debug("Blocked Operations:");
+
+        str = cfg[P11PROV_CFG_BLOCK_OPS];
+        while (str) {
+            sep = strchr(str, ' ');
+            if (sep) {
+                tokl = sep - str;
+            } else {
+                tokl = len;
+            }
+            match = false;
+            for (int i = 0; i < OSSL_OP__HIGHEST; i++) {
+                if (p11prov_block_ops_names[i]
+                    && strncmp(str, p11prov_block_ops_names[i], tokl) == 0) {
+                    match = true;
+                    P11PROV_debug("  %s", p11prov_block_ops_names[i]);
+                    ctx->blocked_ops[i] = true;
+                    break;
+                }
+            }
+            if (!match) {
+                P11PROV_debug("  **invalid token: [%.*s]", (int)tokl, str);
+            }
+            len -= tokl;
+            if (sep) {
+                str = sep + 1;
+                len--;
+            } else {
+                str = NULL;
+            }
+        }
+    } else {
+        P11PROV_debug("Blocked Operations: None");
+    }
 
     /* PAY ATTENTION: do this as the last thing */
     if (cfg[P11PROV_CFG_LOAD_BEHAVIOR] != NULL

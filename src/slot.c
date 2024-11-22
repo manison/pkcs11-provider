@@ -27,6 +27,10 @@ struct p11prov_slots_ctx {
     P11PROV_SLOT **slots;
     int num;
     pthread_rwlock_t rwlock;
+
+    /* This is the first slot that can be r/w and
+     * accepts login */
+    CK_SLOT_ID default_slot;
 };
 
 static void get_slot_profiles(P11PROV_CTX *ctx, struct p11prov_slot *slot)
@@ -168,6 +172,8 @@ CK_RV p11prov_init_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
         goto done;
     }
 
+    sctx->default_slot = CK_UNAVAILABLE_INFORMATION;
+
     for (size_t i = 0; i < num; i++) {
         P11PROV_SLOT *slot;
 
@@ -176,18 +182,22 @@ CK_RV p11prov_init_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
             ret = CKR_HOST_MEMORY;
             goto done;
         }
-        sctx->slots[sctx->num] = slot;
 
         ret = p11prov_GetSlotInfo(ctx, slotid[i], &slot->slot);
         if (ret != CKR_OK || (slot->slot.flags & CKF_TOKEN_PRESENT) == 0) {
             /* skip slot */
+            OPENSSL_free(slot);
             continue;
         }
         ret = p11prov_GetTokenInfo(ctx, slotid[i], &slot->token);
         if (ret) {
             /* skip slot */
+            OPENSSL_free(slot);
             continue;
         }
+
+        sctx->slots[sctx->num] = slot;
+        sctx->num++;
 
         trim(slot->slot.slotDescription);
         trim(slot->slot.manufacturerID);
@@ -224,10 +234,19 @@ CK_RV p11prov_init_slots(P11PROV_CTX *ctx, P11PROV_SLOTS_CTX **slots)
         }
         get_slot_mechanisms(ctx, slot);
 
+        /* set default slot to the first one that can be used (for example
+         * softoken has a slot that can't be used to store session keys)
+         * and the following query excludes it */
+        if ((sctx->default_slot == CK_UNAVAILABLE_INFORMATION)
+            && (slot->token.flags & CKF_LOGIN_REQUIRED)
+            && (slot->token.flags & CKF_USER_PIN_INITIALIZED)
+            && (slot->token.flags & CKF_TOKEN_INITIALIZED)
+            && (!(slot->token.flags & CKF_USER_PIN_LOCKED))) {
+            sctx->default_slot = slot->id;
+        }
+
         P11PROV_debug_slot(ctx, slot->id, &slot->slot, &slot->token,
                            slot->mechs, slot->nmechs, slot->profiles);
-
-        sctx->num++;
     }
 
 done:
@@ -329,9 +348,6 @@ void p11prov_free_slots(P11PROV_SLOTS_CTX *sctx)
         P11PROV_raise(sctx->provctx, CKR_CANT_LOCK,
                       "Failed to destroy slots lock (errno:%d), leaking memory",
                       err);
-        return;
-    }
-    if (sctx->num == 0) {
         return;
     }
     for (int i = 0; i < sctx->num; i++) {
@@ -569,4 +585,9 @@ P11PROV_SESSION_POOL *p11prov_slot_get_session_pool(P11PROV_SLOT *slot)
 bool p11prov_slot_check_req_login(P11PROV_SLOT *slot)
 {
     return slot->token.flags & CKF_LOGIN_REQUIRED;
+}
+
+CK_SLOT_ID p11prov_get_default_slot(P11PROV_SLOTS_CTX *sctx)
+{
+    return sctx->default_slot;
 }
