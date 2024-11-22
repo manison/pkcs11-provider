@@ -8,6 +8,7 @@ Source: https://github.com/latchset/pkcs11-provider/
 #
 Files: .github/*
        .gitignore
+       .gitmodules
        Makefile
        meson.build
        meson_options.txt
@@ -25,7 +26,11 @@ Files: .github/*
        docs/*
        tests/lsan.supp
        tools/openssl*.cnf
-Copyright: (C) 2022 Simo Sorce <simo@redhat.com>
+       tests/*.pem
+       tests/cert.json.in
+       tests/cert.json.part.in
+       scripts/clean-dist.sh
+Copyright: (C) 2022 - 2024 Simo Sorce <simo@redhat.com>
 License: Apache-2.0
 
 #

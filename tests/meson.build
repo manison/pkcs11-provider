@@ -30,16 +30,13 @@ if nss_softokn.found()
   endif
 endif
 
-test_setup = {
-  'setup_softokn': {'suite': 'softokn', 'exe': find_program('setup-softokn.sh')},
-  'setup_softhsm': {'suite': 'softhsm', 'exe': find_program('setup-softhsm.sh')},
-}
-
-foreach name, targs : test_setup
+setup_script=find_program('setup.sh')
+foreach suite : ['softokn', 'softhsm', 'kryoptic']
   test(
-    name,
-    targs.get('exe'),
-    suite: targs.get('suite'),
+    'setup',
+    setup_script,
+    args: suite,
+    suite: suite,
     env: conf_env,
     is_parallel: false,
   )
@@ -75,21 +72,27 @@ if get_option('b_sanitize') == 'address'
   endif
 
   # Avoids closing dlopened libraries for ASan to be able to print usable traces
-  fake_dlclose = shared_module(
+  fake_dlclose = shared_library(
     'fake_dlclose',
     'fake_dlclose.c',
     name_prefix: '',
   )
 
-  test_env.set('ASAN_OPTIONS', 'fast_unwind_on_malloc=0')
+  test_env.set('ASAN_OPTIONS', 'fast_unwind_on_malloc=0:detect_leaks=1')
   test_env.set('LSAN_OPTIONS', 'suppressions=@0@/lsan.supp'.format(meson.current_source_dir()))
   test_env.set('FAKE_DLCLOSE', fake_dlclose.full_path())
+
+  preload_env_var = 'LD_PRELOAD'
+  if host_machine.system() == 'darwin'
+    preload_env_var = 'DYLD_INSERT_LIBRARIES'
+  endif
+
   # LD_PRELOAD is needed before invoking openssl as it is not instrumented with
   # asan and asan needs to be loaded as a first dynamic library of the process.
   if preload_libasan != 'no'
-    test_env.set('CHECKER', 'env LD_PRELOAD=@0@:@1@'.format(preload_libasan, fake_dlclose.full_path()))
+    test_env.set('CHECKER', 'env @0@=@1@:@2@'.format(preload_env_var, preload_libasan, fake_dlclose.full_path()))
   else
-    test_env.set('CHECKER', 'env LD_PRELOAD=@0@'.format(fake_dlclose.full_path()))
+    test_env.set('CHECKER', 'env @0@=@1@'.format(preload_env_var, fake_dlclose.full_path()))
   endif
 endif
 
@@ -97,6 +100,7 @@ test_programs = {
   'tsession': ['tsession.c'],
   'tgenkey': ['tgenkey.c'],
   'tlsctx': ['tlsctx.c', 'util.c'],
+  'tlssetkey': ['tlssetkey.c', 'util.c'],
   'tdigests': ['tdigests.c'],
   'treadkeys': ['treadkeys.c'],
   'tcmpkeys': ['tcmpkeys.c', 'util.c'],
@@ -114,27 +118,30 @@ foreach t, sources : test_programs
 endforeach
 
 tests = {
-  'basic': {'suites': ['softokn', 'softhsm']},
-  'pubkey': {'suites': ['softokn', 'softhsm']},
-  'certs': {'suites': ['softokn', 'softhsm']},
-  'ecc': {'suites': ['softokn', 'softhsm']},
-  'edwards': {'suites': ['softhsm']},
-  'ecdh': {'suites': ['softokn']},
-  'democa': {'suites': ['softokn', 'softhsm'], 'is_parallel': false},
-  'digest': {'suites': ['softokn', 'softhsm']},
-  'fork': {'suites': ['softokn', 'softhsm']},
-  'oaepsha2': {'suites': ['softokn']},
-  'hkdf': {'suites': ['softokn']},
-  'rsapss': {'suites': ['softokn', 'softhsm']},
+  'basic': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'pubkey': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'certs': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'ecc': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'edwards': {'suites': ['softhsm', 'kryoptic']},
+  'ecdh': {'suites': ['softokn', 'kryoptic']},
+  'democa': {'suites': ['softokn', 'softhsm', 'kryoptic'], 'is_parallel': false},
+  'digest': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'fork': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'oaepsha2': {'suites': ['softokn', 'kryoptic']},
+  'hkdf': {'suites': ['softokn', 'kryoptic']},
+  'imported' : {'suites': ['softokn', 'kryoptic']},
+  'rsapss': {'suites': ['softokn', 'softhsm', 'kryoptic']},
   'rsapssam': {'suites': ['softhsm']},
-  'genkey': {'suites': ['softokn', 'softhsm']},
-  'session': {'suites': ['softokn', 'softhsm']},
-  'rand': {'suites': ['softokn', 'softhsm']},
-  'readkeys': {'suites': ['softokn', 'softhsm']},
-  'tls': {'suites': ['softokn', 'softhsm'], 'is_parallel': false},
-  'uri': {'suites': ['softokn', 'softhsm']},
-  'ecxc': {'suites': ['softhsm']},
-  'cms': {'suites': ['softokn']},
+  'genkey': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'session': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'rand': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'readkeys': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'tls': {'suites': ['softokn', 'softhsm', 'kryoptic'], 'is_parallel': false},
+  'tlsfuzzer': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'uri': {'suites': ['softokn', 'softhsm', 'kryoptic']},
+  'ecxc': {'suites': ['softhsm', 'kryoptic']},
+  'cms': {'suites': ['softokn', 'kryoptic']},
+  'pinlock': {'suites': ['kryoptic']},
 }
 
 test_wrapper = find_program('test-wrapper')

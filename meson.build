@@ -1,6 +1,6 @@
 project(
   'pkcs11-provider', 'c',
-  version: '0.5',
+  version: '0.6',
   meson_version: '>= 0.57',
   default_options: ['c_std=c11'],
 )
@@ -83,6 +83,8 @@ foreach h : headers
 endforeach
 
 configure_file(output: 'config.h', configuration: conf)
+
+meson.add_dist_script('scripts/clean-dist.sh')
 
 subdir('src')
 subdir('docs')
