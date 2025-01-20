@@ -666,6 +666,53 @@ static int fetch_rsa_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     return CKR_OK;
 }
 
+static CK_RV decode_ec_point(CK_KEY_TYPE key_type, CK_ATTRIBUTE *attr,
+                             struct data_buffer *ec_point)
+{
+    ASN1_OCTET_STRING *octet;
+    const unsigned char *val;
+    CK_RV ret = CKR_GENERAL_ERROR;
+    int err;
+
+    /* in d2i functions 'in' is overwritten to return the remainder of
+     * the buffer after parsing, so we always need to avoid passing in
+     * our pointer holders, to avoid having them clobbered */
+    val = attr->pValue;
+    octet = d2i_ASN1_OCTET_STRING(NULL, (const unsigned char **)&val,
+                                  attr->ulValueLen);
+    if (!octet) {
+        /* 3.1 spec says CKA_EC_POINT is not DER encoded for Edwards and
+         * Montgomery curves so do not fail in that case and just take
+         * the value as is */
+        if (key_type == CKK_EC) {
+            return CKR_KEY_INDIGESTIBLE;
+        } else {
+            octet = ASN1_OCTET_STRING_new();
+            if (!octet) {
+                return CKR_HOST_MEMORY;
+            }
+            /* makes a copy of the value */
+            err = ASN1_OCTET_STRING_set(octet, attr->pValue, attr->ulValueLen);
+            if (err != RET_OSSL_OK) {
+                ret = CKR_HOST_MEMORY;
+                goto done;
+            }
+        }
+    }
+
+    ec_point->data = octet->data;
+    ec_point->length = octet->length;
+
+    /* moved octet data, do not free it */
+    octet->data = NULL;
+    octet->length = 0;
+
+    ret = CKR_OK;
+done:
+    ASN1_OCTET_STRING_free(octet);
+    return ret;
+}
+
 const CK_BYTE ed25519_ec_params[] = { ED25519_EC_PARAMS };
 const CK_BYTE ed448_ec_params[] = { ED448_EC_PARAMS };
 
@@ -679,7 +726,8 @@ static CK_RV pre_process_ec_key_data(P11PROV_OBJ *key)
     int buffer_size;
     const char *curve_name = NULL;
     int curve_nid;
-    ASN1_OCTET_STRING *octet;
+    struct data_buffer ec_point = { 0 };
+    CK_RV ret;
 
     attr = p11prov_obj_get_attr(key, CKA_EC_PARAMS);
     if (!attr) {
@@ -778,21 +826,15 @@ static CK_RV pre_process_ec_key_data(P11PROV_OBJ *key)
         return CKR_OK;
     }
 
-    val = attr->pValue;
-    octet = d2i_ASN1_OCTET_STRING(NULL, (const unsigned char **)&val,
-                                  attr->ulValueLen);
-    if (!octet) {
-        return CKR_KEY_INDIGESTIBLE;
+    ret = decode_ec_point(type, attr, &ec_point);
+    if (ret != CKR_OK) {
+        return ret;
     }
 
-    CKATTR_ASSIGN(key->attrs[key->numattrs], CKA_P11PROV_PUB_KEY, octet->data,
-                  octet->length);
+    /* takes the data allocated in ec_point */
+    CKATTR_ASSIGN(key->attrs[key->numattrs], CKA_P11PROV_PUB_KEY, ec_point.data,
+                  ec_point.length);
     key->numattrs++;
-
-    /* moved octet data to attrs, do not free it */
-    octet->data = NULL;
-    octet->length = 0;
-    ASN1_OCTET_STRING_free(octet);
     return CKR_OK;
 }
 
@@ -2228,29 +2270,29 @@ CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key)
 
         ec_point = p11prov_obj_get_attr(key, CKA_EC_POINT);
         if (ec_point) {
-            const unsigned char *val;
-            ASN1_OCTET_STRING *octet;
+            struct data_buffer data = { 0 };
             void *tmp_ptr;
+            CK_RV ret;
 
-            val = ec_point->pValue;
-            octet = d2i_ASN1_OCTET_STRING(NULL, (const unsigned char **)&val,
-                                          ec_point->ulValueLen);
-            if (!octet) {
-                P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
-                              "Failed to decode CKA_EC_POINT");
+            ret = decode_ec_point(key->data.key.type, ec_point, &data);
+            if (ret != CKR_OK) {
+                P11PROV_raise(key->ctx, ret, "Failed to decode EC_POINT");
                 return NULL;
             }
+
             tmp_ptr = OPENSSL_realloc(key->attrs, sizeof(CK_ATTRIBUTE)
                                                       * (key->numattrs + 1));
             if (!tmp_ptr) {
                 P11PROV_raise(key->ctx, CKR_HOST_MEMORY,
                               "Failed to allocate memory key attributes");
+                OPENSSL_free(data.data);
                 return NULL;
             }
             key->attrs = tmp_ptr;
 
+            /* takes the data allocated in data */
             CKATTR_ASSIGN(key->attrs[key->numattrs], CKA_P11PROV_PUB_KEY,
-                          octet->data, octet->length);
+                          data.data, data.length);
             key->numattrs++;
 
             pub_key = &key->attrs[key->numattrs - 1];
@@ -2435,6 +2477,31 @@ done:
     return ret;
 }
 
+static int p11prov_obj_get_ed_nid(CK_ATTRIBUTE *ecp)
+{
+    const unsigned char *val = ecp->pValue;
+    ASN1_OBJECT *obj = d2i_ASN1_OBJECT(NULL, &val, ecp->ulValueLen);
+    if (obj) {
+        int nid = OBJ_obj2nid(obj);
+        ASN1_OBJECT_free(obj);
+        if (nid != NID_undef) {
+            return nid;
+        }
+    }
+
+    /* it might be the parameters are encoded printable string
+     * for EdDSA which OpenSSL does not understand */
+    if (ecp->ulValueLen == ED25519_EC_PARAMS_LEN
+        && memcmp(ecp->pValue, ed25519_ec_params, ED25519_EC_PARAMS_LEN) == 0) {
+        return NID_ED25519;
+    } else if (ecp->ulValueLen == ED448_EC_PARAMS_LEN
+               && memcmp(ecp->pValue, ed448_ec_params, ED448_EC_PARAMS_LEN)
+                      == 0) {
+        return NID_ED448;
+    }
+    return NID_undef;
+}
+
 int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
                         int cmp_type)
 {
@@ -2493,7 +2560,6 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
         break;
 
     case CKK_EC:
-    case CKK_EC_EDWARDS:
         ret = cmp_attr(key1, key2, CKA_EC_PARAMS);
         if (ret != RET_OSSL_OK) {
             /* If EC_PARAMS do not match it may be due to encoding.
@@ -2547,6 +2613,50 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
             BN_CTX_free(bnctx);
             if (ret != RET_OSSL_OK) {
                 return ret;
+            }
+        }
+        if (cmp_type & OBJ_CMP_KEY_PRIVATE) {
+            /* unfortunately we can't really read private attributes
+             * and there is no comparison function int he PKCS11 API.
+             * Generally you do not have 2 identical keys stored in to two
+             * separate objects so the initial shortcircuit that matches if
+             * slotid/handle are identical will often cover this. When that
+             * fails we have no option but to fail for now. */
+            P11PROV_debug("We can't really match private keys");
+            /* OTOH if group and pub point match either this is a broken key
+             * or the private key must also match */
+            cmp_type = OBJ_CMP_KEY_PUBLIC;
+        }
+        break;
+    case CKK_EC_EDWARDS:
+        /* The EdDSA params can be encoded as printable string, which is
+         * not recognized by OpenSSL and does not have respective EC_GROUP */
+        ret = cmp_attr(key1, key2, CKA_EC_PARAMS);
+        if (ret != RET_OSSL_OK) {
+            /* If EC_PARAMS do not match it may be due to encoding. */
+            CK_ATTRIBUTE *ec_p;
+            int nid1;
+            int nid2;
+
+            ec_p = p11prov_obj_get_attr(key1, CKA_EC_PARAMS);
+            if (!ec_p) {
+                return RET_OSSL_ERR;
+            }
+            nid1 = p11prov_obj_get_ed_nid(ec_p);
+            if (nid1 == NID_undef) {
+                return RET_OSSL_ERR;
+            }
+
+            ec_p = p11prov_obj_get_attr(key2, CKA_EC_PARAMS);
+            if (!ec_p) {
+                return RET_OSSL_ERR;
+            }
+            nid2 = p11prov_obj_get_ed_nid(ec_p);
+            if (nid2 == NID_undef) {
+                return RET_OSSL_ERR;
+            }
+            if (nid1 != nid2) {
+                return RET_OSSL_ERR;
             }
         }
         if (cmp_type & OBJ_CMP_KEY_PRIVATE) {
@@ -2974,6 +3084,134 @@ done:
     return rv;
 }
 
+static CK_RV prep_ed_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
+                          struct pool_find_ctx *findctx)
+{
+    OSSL_PARAM tmp;
+    const OSSL_PARAM *p;
+
+    data_buffer digest_data[4];
+    data_buffer digest = { 0 };
+
+    const unsigned char *ecparams = NULL;
+    int len, i;
+    CK_RV rv;
+
+    if (findctx->numattrs != MAX_ATTRS_SIZE) {
+        return CKR_ARGUMENTS_BAD;
+    }
+    findctx->numattrs = 0;
+
+    switch (findctx->class) {
+    case CKO_PUBLIC_KEY:
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PUB_KEY);
+        if (!p) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                          OSSL_PKEY_PARAM_PUB_KEY);
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+
+        if (p->data_size == ED25519_BYTE_SIZE) {
+            ecparams = ed25519_ec_params;
+            len = ED25519_EC_PARAMS_LEN;
+            findctx->bit_size = ED25519_BIT_SIZE;
+            findctx->key_size = ED25519_BYTE_SIZE;
+        } else if (p->data_size == ED448_BYTE_SIZE) {
+            ecparams = ed448_ec_params;
+            len = ED448_EC_PARAMS_LEN;
+            findctx->bit_size = ED448_BIT_SIZE;
+            findctx->key_size = ED448_BYTE_SIZE;
+        } else {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE,
+                          "Public key of unknown length %lu", p->data_size);
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+
+        rv = param_to_attr(ctx, params, OSSL_PKEY_PARAM_PUB_KEY,
+                           &findctx->attrs[0], CKA_P11PROV_PUB_KEY, false);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+
+        findctx->numattrs++;
+
+        break;
+    case CKO_PRIVATE_KEY:
+        /* A Token would never allow us to search by private exponent,
+         * so we store a hash of the private key in CKA_ID */
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                          OSSL_PKEY_PARAM_PRIV_KEY);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+
+        i = 0;
+
+        if (p->data_size == ED25519_BYTE_SIZE) {
+            ecparams = ed25519_ec_params;
+            len = ED25519_EC_PARAMS_LEN;
+            findctx->bit_size = ED25519_BIT_SIZE;
+            findctx->key_size = ED25519_BYTE_SIZE;
+        } else if (p->data_size == ED448_BYTE_SIZE) {
+            ecparams = ed448_ec_params;
+            len = ED448_EC_PARAMS_LEN;
+            findctx->bit_size = ED448_BIT_SIZE;
+            findctx->key_size = ED448_BYTE_SIZE;
+        } else {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE,
+                          "Private key of unknown length %lu", p->data_size);
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+
+        /* prefix */
+        digest_data[i].data = (uint8_t *)"PrivKey";
+        digest_data[i].length = 7;
+        i++;
+
+        digest_data[i].data = (CK_BYTE *)ecparams;
+        digest_data[i].length = len;
+        i++;
+
+        digest_data[i].data = p->data;
+        digest_data[i].length = p->data_size;
+        i++;
+
+        digest_data[i].data = NULL;
+
+        rv = p11prov_digest_util(ctx, "sha256", NULL, digest_data, &digest);
+        if (rv != CKR_OK) {
+            return rv;
+        }
+        findctx->attrs[0].type = CKA_ID;
+        findctx->attrs[0].pValue = digest.data;
+        findctx->attrs[0].ulValueLen = digest.length;
+        findctx->numattrs++;
+
+        break;
+    default:
+        return CKR_GENERAL_ERROR;
+    }
+
+    /* common params */
+    tmp.key = "EC Params";
+    tmp.data = (CK_BYTE *)ecparams;
+    tmp.data_size = len;
+    rv = param_to_attr(ctx, &tmp, tmp.key, &findctx->attrs[findctx->numattrs],
+                       CKA_EC_PARAMS, false);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+    findctx->numattrs++;
+    rv = CKR_OK;
+
+done:
+    return rv;
+}
+
 static CK_RV return_dup_key(P11PROV_OBJ *dst, P11PROV_OBJ *src)
 {
     CK_RV rv;
@@ -3073,8 +3311,15 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC:
-    case CKK_EC_EDWARDS:
         rv = prep_ec_find(ctx, params, &findctx);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        allocattrs = EC_ATTRS_NUM;
+        break;
+
+    case CKK_EC_EDWARDS:
+        rv = prep_ed_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
         }
@@ -3620,8 +3865,14 @@ static CK_RV p11prov_obj_import_private_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC:
-    case CKK_EC_EDWARDS:
         rv = prep_ec_find(ctx, params, &findctx);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        break;
+
+    case CKK_EC_EDWARDS:
+        rv = prep_ed_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
         }

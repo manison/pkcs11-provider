@@ -27,10 +27,10 @@ find_kryoptic \
 title LINE "Creating Kyroptic database"
 
 # Kryoptic configuration
-export KRYOPTIC_CONF="$TOKDIR/kryoptic.sql"
+export KRYOPTIC_CONF="${KRYOPTIC_CONF:-$TOKDIR/kryoptic.sql}"
 
-export TOKENLABEL="Kryoptic Token"
-export TOKENLABELURI="Kryoptic%20Token"
+export TOKENLABEL="${TOKENLABEL:-Kryoptic Token}"
+export TOKENLABELURI="${TOKENLABELURI:-Kryoptic%20Token}"
 
 # init token
 pkcs11-tool --module "${P11LIB}" --init-token \
@@ -40,3 +40,9 @@ pkcs11-tool --module "${P11LIB}" --so-pin "${PINVALUE}" \
     --login --login-type so --init-pin --pin "${PINVALUE}" 2>&1
 
 export TOKENCONFIGVARS="export KRYOPTIC_CONF=$TOKDIR/kryoptic.sql"
+
+export TESTPORT="34000"
+
+# Older versions of certtool do not support non-DER encoded CKA_EC_POINT
+# so set the kryoptic env var to enforce compatibility for the setup phase
+export KRYOPTIC_EC_POINT_ENCODING="DER"
