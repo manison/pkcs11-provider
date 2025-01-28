@@ -30,7 +30,7 @@ prepare_test() {
     KEY="$2"
     CERT="$3"
     # Prepare the tlsfuzzer configuration
-    sed -e "s|@PRIURI@|$KEY|g" -e "s/@CRTURI@/$CERT/g" \
+    sed -e "s|@PRIURI@|$KEY|g" -e "s|@CRTURI@|$CERT|g" \
         -e "s/@PORT@/$PORT/g" \
         -e "s/@PROPQ@/$PROPQ/g" \
         -e "s/@SIGALGS@/$SIGALGS/g" "${TESTSSRCDIR}/${TEMPLATE}" >>"${TMPFILE}"
@@ -62,6 +62,20 @@ run_tests() {
     title PARA "Prepare test for RSA"
     prepare_test cert.json.rsa.in "$PRIURI" "$CRTURI"
 
+    if [[ -n "$RSAPSSBASEURI" ]]; then
+        title PARA "Prepare test for RSA-PSS"
+
+        # do selfsign now using openssl as certool can not create SPKI using
+        # RSA-PSS
+        selfsign_cert "${RSAPSSPRIURI}" "${TMPPDIR}/rsapss-default.pem" \
+            "-sigopt rsa_padding_mode:pss" \
+            "-sigopt digest:sha256" \
+            "-sigopt rsa_pss_saltlen:-1"
+
+        prepare_test cert.json.rsapss.in \
+            "$RSAPSSPRIURI" "${TMPPDIR}/rsapss-default.pem"
+    fi
+
     title PARA "Prepare test for ECDSA"
     # Note, that tlsfuzzer expects the homogeneous CA and server keys
     # so we are using here the self-signed peer EC Key, instead of
@@ -69,8 +83,13 @@ run_tests() {
     prepare_test cert.json.ecdsa.in "$ECPEERPRIURI" "$ECPEERCRTURI"
 
     if [[ -n "$EDBASEURI" ]]; then
-        title PARA "Prepare test for EdDSA"
-        prepare_test cert.json.eddsa.in "$EDPRIURI" "$EDCRTURI"
+        title PARA "Prepare test for Ed25519"
+        prepare_test cert.json.ed25519.in "$EDPRIURI" "$EDCRTURI"
+    fi
+
+    if [[ -n "$ED2BASEURI" ]]; then
+        title PARA "Prepare test for Ed448"
+        prepare_test cert.json.ed448.in "$ED2PRIURI" "$ED2CRTURI"
     fi
 
     # the missing closing brace

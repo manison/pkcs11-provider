@@ -17,11 +17,11 @@ SUPPORT_ED448=1
 SUPPORT_RSA_PKCS1_ENCRYPTION=1
 SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT=1
 SUPPORT_TLSFUZZER=1
+SUPPORT_ALLOWED_MECHANISMS=0
 
-# Ed448 requires OpenSC 0.26.0, which is not available in Ubuntu and CentOS 9
-if [[ -f /etc/debian_version ]] && grep Ubuntu /etc/lsb-release; then
-    SUPPORT_ED448=0
-elif [[ -f /etc/redhat-release ]] && grep "release 9" /etc/redhat-release; then
+# Ed448 requires OpenSC 0.26.0
+OPENSC_VERSION=$(opensc-tool -i | grep OpenSC | sed -e "s/OpenSC 0\.\([0-9]*\).*/\1/")
+if [[ "$OPENSC_VERSION" -le "25" ]]; then
     SUPPORT_ED448=0
 fi
 
@@ -142,6 +142,23 @@ CACRT_PEM="${TMPPDIR}/${CACRTN}.pem"
 CACRT="${TMPPDIR}/${CACRTN}.crt"
 openssl x509 -inform DER -in "$CACRT" -outform PEM -out "$CACRT_PEM"
 
+CABASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
+CABASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
+CABASEURI="pkcs11:id=${URIKEYID}"
+CAPUBURI="pkcs11:type=public;id=${URIKEYID}"
+CAPRIURI="pkcs11:type=private;id=${URIKEYID}"
+CACRTURI="pkcs11:type=cert;object=${CACRTN}"
+
+title LINE "RSA PKCS11 URIS"
+echo "${CABASEURIWITHPINVALUE}"
+echo "${CABASEURIWITHPINSOURCE}"
+echo "${CABASEURI}"
+echo "${CAPUBURI}"
+echo "${CAPRIURI}"
+echo "${CACRTURI}"
+echo ""
+
+
 cat "${TMPPDIR}/cacert.cfg" > "${TMPPDIR}/cert.cfg"
 # the organization identification is not in the CA
 echo 'organization = "PKCS11 Provider"' >> "${TMPPDIR}/cert.cfg"
@@ -152,6 +169,7 @@ ca_sign() {
     LABEL=$1
     CN=$2
     KEYID=$3
+    shift 3
     ((SERIAL+=1))
     sed -e "s|cn = .*|cn = $CN|g" \
         -e "s|serial = .*|serial = $SERIAL|g" \
@@ -163,7 +181,8 @@ ca_sign() {
 	--load-privkey "pkcs11:object=$LABEL;token=$TOKENLABELURI;type=private" \
         --load-pubkey "pkcs11:object=$LABEL;token=$TOKENLABELURI;type=public" --outder \
         --load-ca-certificate "${CACRT}" --inder \
-        --load-ca-privkey="pkcs11:object=$CACRTN;token=$TOKENLABELURI;type=private"
+        --load-ca-privkey="pkcs11:object=$CACRTN;token=$TOKENLABELURI;type=private" \
+        "$@"
     pkcs11-tool "${P11DEFARGS[@]}" --write-object "${TMPPDIR}/${LABEL}.crt" --type=cert \
         --id="$KEYID" --label="$LABEL" 2>&1
 }
@@ -395,6 +414,63 @@ echo "${ECPRI3URI}"
 echo "${ECCRT3URI}"
 echo ""
 
+if [ "${SUPPORT_ALLOWED_MECHANISMS}" -eq 1 ]; then
+    # generate unrestricted RSA-PSS key pair and self-signed RSA-PSS certificate
+    KEYID='0010'
+    URIKEYID="%00%10"
+    TSTCRTN="testRsaPssCert"
+
+    pkcs11-tool "${P11DEFARGS[@]}" --keypairgen --key-type="RSA:2048" \
+        --label="${TSTCRTN}" --id="$KEYID" --allowed-mechanisms \
+        RSA-PKCS-PSS,SHA1-RSA-PKCS-PSS,SHA224-RSA-PKCS-PSS,SHA256-RSA-PKCS-PSS,SHA384-RSA-PKCS-PSS,SHA512-RSA-PKCS-PSS
+    ca_sign "${TSTCRTN}" "My RsaPss Cert" $KEYID "--sign-params=RSA-PSS"
+
+    RSAPSSBASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
+    RSAPSSBASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
+    RSAPSSBASEURI="pkcs11:id=${URIKEYID}"
+    RSAPSSPUBURI="pkcs11:type=public;id=${URIKEYID}"
+    RSAPSSPRIURI="pkcs11:type=private;id=${URIKEYID}"
+    RSAPSSCRTURI="pkcs11:type=cert;object=${TSTCRTN}"
+
+    title LINE "RSA-PSS PKCS11 URIS"
+    echo "${RSAPSSBASEURIWITHPINVALUE}"
+    echo "${RSAPSSBASEURIWITHPINSOURCE}"
+    echo "${RSAPSSBASEURI}"
+    echo "${RSAPSSPUBURI}"
+    echo "${RSAPSSPRIURI}"
+    echo "${RSAPSSCRTURI}"
+    echo ""
+
+    # generate RSA-PSS (3k) key pair restricted to SHA256 digests
+    # and self-signed RSA-PSS certificate
+    KEYID='0011'
+    URIKEYID="%00%11"
+    TSTCRTN="testRsaPss2Cert"
+
+    pkcs11-tool "${P11DEFARGS[@]}" --keypairgen --key-type="RSA:3092" \
+        --label="${TSTCRTN}" --id="$KEYID" --allowed-mechanisms \
+        SHA256-RSA-PKCS-PSS
+    ca_sign "${TSTCRTN}" "My RsaPss2 Cert" $KEYID \
+        "--sign-params=RSA-PSS" "--hash=SHA256"
+
+    RSAPSS2BASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
+    RSAPSS2BASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
+    RSAPSS2BASEURI="pkcs11:id=${URIKEYID}"
+    RSAPSS2PUBURI="pkcs11:type=public;id=${URIKEYID}"
+    RSAPSS2PRIURI="pkcs11:type=private;id=${URIKEYID}"
+    RSAPSS2CRTURI="pkcs11:type=cert;object=${TSTCRTN}"
+
+    title LINE "RSA-PSS 2 PKCS11 URIS"
+    echo "${RSAPSS2BASEURIWITHPINVALUE}"
+    echo "${RSAPSS2BASEURIWITHPINSOURCE}"
+    echo "${RSAPSS2BASEURI}"
+    echo "${RSAPSS2PUBURI}"
+    echo "${RSAPSS2PRIURI}"
+    echo "${RSAPSS2CRTURI}"
+    echo ""
+fi
+
+
 title PARA "Show contents of ${TOKENTYPE} token"
 echo " ----------------------------------------------------------------------------------------------------"
 pkcs11-tool "${P11DEFARGS[@]}" -O
@@ -429,16 +505,23 @@ export SUPPORT_ED448="${SUPPORT_ED448}"
 export SUPPORT_RSA_PKCS1_ENCRYPTION="${SUPPORT_RSA_PKCS1_ENCRYPTION}"
 export SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT="${SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT}"
 export SUPPORT_TLSFUZZER="${SUPPORT_TLSFUZZER}"
+export SUPPORT_ALLOWED_MECHANISMS="${SUPPORT_ALLOWED_MECHANISMS}"
 
 export TESTPORT="${TESTPORT}"
-
-export CACRT="${CACRT_PEM}"
 
 export TOKDIR="${TOKDIR}"
 export TMPPDIR="${TMPPDIR}"
 export PINVALUE="${PINVALUE}"
 export SEEDFILE="${TMPPDIR}/noisefile.bin"
 export RAND64FILE="${TMPPDIR}/64krandom.bin"
+
+export CACRT="${CACRT_PEM}"
+export CABASEURIWITHPINVALUE="${CABASEURIWITHPINVALUE}"
+export CABASEURIWITHPINSOURCE="${CABASEURIWITHPINSOURCE}"
+export CABASEURI="${CABASEURI}"
+export CAPUBURI="${CAPUBURI}"
+export CAPRIURI="${CAPRIURI}"
+export CACRTURI="${CACRTURI}"
 
 export BASEURIWITHPINVALUE="${BASEURIWITHPINVALUE}"
 export BASEURIWITHPINSOURCE="${BASEURIWITHPINSOURCE}"
@@ -513,6 +596,25 @@ export ECXBASEURIWITHPINSOURCE="${ECXBASEURIWITHPINSOURCE}"
 export ECXBASEURI="${ECXBASEURI}"
 export ECXPUBURI="${ECXPUBURI}"
 export ECXPRIURI="${ECXPRIURI}"
+DBGSCRIPT
+fi
+
+if [ -n "${RSAPSSBASEURI}" ]; then
+    cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
+
+export RSAPSSBASEURIWITHPINVALUE="${RSAPSSBASEURIWITHPINVALUE}"
+export RSAPSSBASEURIWITHPINSOURCE="${RSAPSSBASEURIWITHPINSOURCE}"
+export RSAPSSBASEURI="${RSAPSSBASEURI}"
+export RSAPSSPUBURI="${RSAPSSPUBURI}"
+export RSAPSSPRIURI="${RSAPSSPRIURI}"
+export RSAPSSCRTURI="${RSAPSSCRTURI}"
+
+export RSAPSS2BASEURIWITHPINVALUE="${RSAPSS2BASEURIWITHPINVALUE}"
+export RSAPSS2BASEURIWITHPINSOURCE="${RSAPSS2BASEURIWITHPINSOURCE}"
+export RSAPSS2BASEURI="${RSAPSS2BASEURI}"
+export RSAPSS2PUBURI="${RSAPSS2PUBURI}"
+export RSAPSS2PRIURI="${RSAPSS2PRIURI}"
+export RSAPSS2CRTURI="${RSAPSS2CRTURI}"
 DBGSCRIPT
 fi
 
