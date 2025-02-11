@@ -30,8 +30,12 @@ if nss_softokn.found()
   endif
 endif
 
+if get_option('enable_explicit_EC_test')
+  conf_env.set('ENABLE_EXPLICIT_EC_TEST', '1')
+endif
+
 setup_script=find_program('setup.sh')
-foreach suite : ['softokn', 'softhsm', 'kryoptic']
+foreach suite : ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']
   test(
     'setup',
     setup_script,
@@ -46,6 +50,10 @@ test_env = environment({
   'TEST_PATH': meson.current_source_dir(),
   'TESTBLDDIR': meson.current_build_dir(),
 })
+
+if get_option('enable_explicit_EC_test')
+  test_env.set('ENABLE_EXPLICIT_EC_TEST', '1')
+endif
 
 valgrind = find_program('valgrind', required: false)
 if valgrind.found()
@@ -96,16 +104,19 @@ if get_option('b_sanitize') == 'address'
   endif
 endif
 
+
 test_programs = {
   'tsession': ['tsession.c'],
-  'tgenkey': ['tgenkey.c'],
+  'tgenkey': ['tgenkey.c', 'util.c'],
   'tlsctx': ['tlsctx.c', 'util.c'],
   'tlssetkey': ['tlssetkey.c', 'util.c'],
   'tdigests': ['tdigests.c'],
   'treadkeys': ['treadkeys.c'],
   'tcmpkeys': ['tcmpkeys.c', 'util.c'],
-  'tfork': ['tfork.c'],
+  'tfork': ['tfork.c', 'util.c'],
+  'tpkey': ['tpkey.c', 'util.c'],
   'pincache': ['pincache.c'],
+  'ccerts': ['ccerts.c', 'util.c'],
 }
 
 test_executables = []
@@ -118,29 +129,30 @@ foreach t, sources : test_programs
 endforeach
 
 tests = {
-  'basic': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'pubkey': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'certs': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'ecc': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'edwards': {'suites': ['softhsm', 'kryoptic']},
-  'ecdh': {'suites': ['softokn', 'kryoptic']},
-  'democa': {'suites': ['softokn', 'softhsm', 'kryoptic'], 'is_parallel': false},
-  'digest': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'fork': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'oaepsha2': {'suites': ['softokn', 'kryoptic']},
-  'hkdf': {'suites': ['softokn', 'kryoptic']},
-  'imported' : {'suites': ['softokn', 'kryoptic']},
-  'rsapss': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'rsapssam': {'suites': ['softhsm']},
-  'genkey': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'session': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'rand': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'readkeys': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'tls': {'suites': ['softokn', 'softhsm', 'kryoptic'], 'is_parallel': false},
-  'tlsfuzzer': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'uri': {'suites': ['softokn', 'softhsm', 'kryoptic']},
-  'ecxc': {'suites': ['softhsm', 'kryoptic']},
-  'cms': {'suites': ['softokn', 'kryoptic']},
+  'basic': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'pubkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'certs': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'ecc': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'edwards': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
+  'ecdh': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'democa': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'is_parallel': false},
+  'digest': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'fork': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'oaepsha2': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'hkdf': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'imported' : {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'rsapss': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'rsapssam': {'suites': ['softhsm', 'kryoptic']},
+  'genkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'pkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'session': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'rand': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'readkeys': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'tls': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'is_parallel': false, 'timeout': 60},
+  'tlsfuzzer': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
+  'uri': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
+  'ecxc': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
+  'cms': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'pinlock': {'suites': ['kryoptic']},
 }
 
@@ -148,6 +160,7 @@ test_wrapper = find_program('test-wrapper')
 
 foreach t, extra_args : tests
   is_parallel = extra_args.get('is_parallel', true)
+  timeout = extra_args.get('timeout', 30)
   foreach suite : extra_args.get('suites', [])
     test(
       t,
@@ -157,6 +170,7 @@ foreach t, extra_args : tests
       env: test_env,
       depends: test_executables,
       is_parallel: false,
+      timeout: timeout,
     )
   endforeach
 endforeach

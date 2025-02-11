@@ -131,6 +131,14 @@ struct key_generator {
     void *cb_arg;
 };
 
+const CK_MECHANISM_TYPE p11prov_rsapss_mechs[P11PROV_N_RSAPSS_MECHS] = {
+    CKM_SHA1_RSA_PKCS_PSS,     CKM_SHA224_RSA_PKCS_PSS,
+    CKM_SHA256_RSA_PKCS_PSS,   CKM_SHA384_RSA_PKCS_PSS,
+    CKM_SHA512_RSA_PKCS_PSS,   CKM_SHA3_224_RSA_PKCS_PSS,
+    CKM_SHA3_256_RSA_PKCS_PSS, CKM_SHA3_384_RSA_PKCS_PSS,
+    CKM_SHA3_512_RSA_PKCS_PSS, CKM_RSA_PKCS_PSS
+};
+
 static int p11prov_common_gen_set_params(void *genctx,
                                          const OSSL_PARAM params[])
 {
@@ -481,7 +489,12 @@ static int p11prov_common_gen(struct key_generator *ctx,
         goto done;
     }
 
-    ret = p11prov_merge_pub_attrs_into_priv(pub_key, priv_key);
+    /* set the public key object as associated object of the private key,
+     * this way a public key can always be found from the private key and
+     * operations that assume an EVP_PKEY represent both can find what
+     * they need.
+     * This operation takes a reference so we can safely free pub_key */
+    p11prov_obj_set_associated(priv_key, pub_key);
 
 done:
     if (ret != CKR_OK) {
@@ -784,7 +797,7 @@ static int p11prov_rsa_export(void *keydata, int selection,
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
     CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
 
-    P11PROV_debug("rsa export %p", keydata);
+    P11PROV_debug("rsa export %p, selection= %d", keydata, selection);
 
     if (key == NULL) {
         return RET_OSSL_ERR;
@@ -796,7 +809,8 @@ static int p11prov_rsa_export(void *keydata, int selection,
 
     /* if anything else is asked for we can't provide it, so be strict */
     if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_key(key, CKK_RSA, true, cb_fn, cb_arg);
+        return p11prov_obj_export_public_key(key, CKK_RSA, true, false, cb_fn,
+                                             cb_arg);
     }
 
     return RET_OSSL_ERR;
@@ -998,21 +1012,14 @@ DISPATCH_KEYMGMT_FN(rsa, gen_settable_params);
 
 static CK_RV set_default_rsapss_mechanisms(struct key_generator *ctx)
 {
-    CK_MECHANISM_TYPE rsapss_mechs[] = {
-        CKM_SHA1_RSA_PKCS_PSS,     CKM_SHA224_RSA_PKCS_PSS,
-        CKM_SHA256_RSA_PKCS_PSS,   CKM_SHA384_RSA_PKCS_PSS,
-        CKM_SHA512_RSA_PKCS_PSS,   CKM_SHA3_224_RSA_PKCS_PSS,
-        CKM_SHA3_256_RSA_PKCS_PSS, CKM_SHA3_384_RSA_PKCS_PSS,
-        CKM_SHA3_512_RSA_PKCS_PSS, CKM_RSA_PKCS_PSS
-    };
-
-    ctx->data.rsa.allowed_types = OPENSSL_malloc(sizeof(rsapss_mechs));
+    size_t mechs_size = sizeof(CK_MECHANISM_TYPE) * P11PROV_N_RSAPSS_MECHS;
+    ctx->data.rsa.allowed_types = OPENSSL_malloc(mechs_size);
     if (ctx->data.rsa.allowed_types == NULL) {
         P11PROV_raise(ctx->provctx, CKR_HOST_MEMORY, "Allocating data");
         return CKR_HOST_MEMORY;
     }
-    memcpy(ctx->data.rsa.allowed_types, rsapss_mechs, sizeof(rsapss_mechs));
-    ctx->data.rsa.allowed_types_size = sizeof(rsapss_mechs);
+    memcpy(ctx->data.rsa.allowed_types, p11prov_rsapss_mechs, mechs_size);
+    ctx->data.rsa.allowed_types_size = mechs_size;
 
     return CKR_OK;
 }
@@ -1194,6 +1201,7 @@ const OSSL_DISPATCH p11prov_rsapss_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(rsa, LOAD, load),
     DISPATCH_KEYMGMT_ELEM(rsa, FREE, free),
     DISPATCH_KEYMGMT_ELEM(rsa, HAS, has),
+    DISPATCH_KEYMGMT_ELEM(rsa, MATCH, match),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(rsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(rsa, EXPORT, export),
@@ -1400,7 +1408,7 @@ static int p11prov_ec_import_genr(CK_KEY_TYPE key_type, void *keydata,
                                   int selection, const OSSL_PARAM params[])
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
-    CK_OBJECT_CLASS class = CKO_PUBLIC_KEY;
+    CK_OBJECT_CLASS class = CK_UNAVAILABLE_INFORMATION;
     CK_RV rv;
 
     P11PROV_debug("ec import %p", key);
@@ -1411,6 +1419,10 @@ static int p11prov_ec_import_genr(CK_KEY_TYPE key_type, void *keydata,
 
     if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
         class = CKO_PRIVATE_KEY;
+    } else if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        class = CKO_PUBLIC_KEY;
+    } else if (selection & OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS) {
+        class = CKO_DOMAIN_PARAMETERS;
     }
 
     /* NOTE: the following is needed because of bug:
@@ -1424,6 +1436,13 @@ static int p11prov_ec_import_genr(CK_KEY_TYPE key_type, void *keydata,
             /* not really a private key */
             class = CKO_PUBLIC_KEY;
         }
+    }
+
+    if (class == CKO_DOMAIN_PARAMETERS && key_type != CKK_EC) {
+        /* There are no Domain parameters associated with an
+         * ECX or RSA key in OpenSSL, so there is nothing really
+         * we can import */
+        return RET_OSSL_ERR;
     }
 
     rv = p11prov_obj_import_key(key, key_type, class, params);
@@ -1444,7 +1463,7 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
-    CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
+    bool params_only = true;
 
     P11PROV_debug("ec export %p", keydata);
 
@@ -1452,16 +1471,21 @@ static int p11prov_ec_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
         return RET_OSSL_ERR;
     }
 
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        /* can't export private keys */
+        return RET_OSSL_ERR;
+    }
+
     if (p11prov_ctx_allow_export(ctx) & DISALLOW_EXPORT_PUBLIC) {
         return RET_OSSL_ERR;
     }
 
-    /* this will return the public EC_POINT as well as DOMAIN_PARAMTERS */
-    if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_key(key, CKK_EC, true, cb_fn, cb_arg);
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        params_only = false;
     }
 
-    return RET_OSSL_ERR;
+    return p11prov_obj_export_public_key(key, CKK_EC, true, params_only, cb_fn,
+                                         cb_arg);
 }
 
 static const OSSL_PARAM p11prov_ec_key_types[] = {
@@ -1900,7 +1924,7 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
-    CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
+    bool params_only = true;
 
     P11PROV_debug("ed export %p", keydata);
 
@@ -1908,17 +1932,21 @@ static int p11prov_ed_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
         return RET_OSSL_ERR;
     }
 
+    if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
+        /* can't export private keys */
+        return RET_OSSL_ERR;
+    }
+
     if (p11prov_ctx_allow_export(ctx) & DISALLOW_EXPORT_PUBLIC) {
         return RET_OSSL_ERR;
     }
 
-    /* this will return the public EC_POINT */
-    if ((class == CKO_PUBLIC_KEY) || (selection & ~(PUBLIC_PARAMS)) == 0) {
-        return p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true, cb_fn,
-                                             cb_arg);
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        params_only = false;
     }
 
-    return RET_OSSL_ERR;
+    return p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true, params_only,
+                                         cb_fn, cb_arg);
 }
 
 static int p11prov_ed_import(void *keydata, int selection,

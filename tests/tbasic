@@ -67,20 +67,21 @@ pkeyutl -verify -inkey "${PUBURI}"
                 -rawin
                 -sigfile ${TMPPDIR}/sha256-dgstsig.bin'
 
+if [[ "$SUPPORT_RSA_PKCS1_ENCRYPTION" = "1" ]]; then
+    SECRETFILE=${TMPPDIR}/rsasecret.txt
+    echo "Super Secret" > "${SECRETFILE}"
 
-SECRETFILE=${TMPPDIR}/rsasecret.txt
-echo "Super Secret" > "${SECRETFILE}"
-
-title LINE "RSA basic encrypt and decrypt"
-ossl '
-pkeyutl -encrypt -inkey "${PUBURI}" -pubin
-                 -in ${SECRETFILE}
-                 -out ${SECRETFILE}.enc'
-ossl '
-pkeyutl -decrypt -inkey "${PRIURI}"
-                 -in ${SECRETFILE}.enc
-                 -out ${SECRETFILE}.dec'
-diff "${SECRETFILE}" "${SECRETFILE}.dec"
+    title LINE "RSA basic encrypt and decrypt"
+    ossl '
+    pkeyutl -encrypt -inkey "${PUBURI}" -pubin
+                     -in ${SECRETFILE}
+                     -out ${SECRETFILE}.enc'
+    ossl '
+    pkeyutl -decrypt -inkey "${PRIURI}"
+                     -in ${SECRETFILE}.enc
+                     -out ${SECRETFILE}.dec'
+    diff "${SECRETFILE}" "${SECRETFILE}.dec"
+fi
 
 title PARA "Test Disallow Public Export"
 ORIG_OPENSSL_CONF=${OPENSSL_CONF}
@@ -128,12 +129,14 @@ ossl 'pkey -in $BASEURIWITHPINVALUE -pubin -pubout -out ${TMPPDIR}/rsa.pub.uripi
 ossl 'pkey -in $ECBASEURIWITHPINVALUE -pubin -pubout -out ${TMPPDIR}/ec.pub.uripin.pem'
 [[ -n $ECXBASEURIWITHPINVALUE ]] && ossl 'pkey -in $ECXBASEURIWITHPINVALUE -pubin -pubout -out ${TMPPDIR}/ecx.pub.uripin.pem'
 [[ -n $EDBASEURIWITHPINVALUE ]] && ossl 'pkey -in $EDBASEURIWITHPINVALUE -pubin -pubout -out ${TMPPDIR}/ed.pub.uripin.pem'
+[[ -n $ED2BASEURIWITHPINVALUE ]] && ossl 'pkey -in $ED2BASEURIWITHPINVALUE -pubin -pubout -out ${TMPPDIR}/ed2.pub.uripin.pem'
 
 title PARA "Test fetching public keys with a PIN source in URI"
 ossl 'pkey -in $BASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/rsa.pub.uripinsource.pem'
 ossl 'pkey -in $ECBASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ec.pub.uripinsource.pem'
 [[ -n $ECXBASEURIWITHPINSOURCE ]] && ossl 'pkey -in $ECXBASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ecx.pub.uripinsource.pem'
 [[ -n $EDBASEURIWITHPINSOURCE ]] && ossl 'pkey -in $EDBASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ed.pub.uripinsource.pem'
+[[ -n $ED2BASEURIWITHPINSOURCE ]] && ossl 'pkey -in $ED2BASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ed2.pub.uripinsource.pem'
 
 title PARA "Test prompting without PIN in config files"
 output=$(expect -c "spawn -noecho $CHECKER openssl pkey -in \"${PRIURI}\" -text -noout;
@@ -286,8 +289,8 @@ fi
 OPENSSL_CONF=${ORIG_OPENSSL_CONF}
 
 title PARA "Test Key generation"
-output=$($CHECKER "${TESTBLDDIR}"/tgenkey "RSA,RSA-PSS,EC,RSAKeyUsage" 2>&1)
 FAIL=0
+output=$($CHECKER "${TESTBLDDIR}"/tgenkey "RSA,RSA-PSS,EC,RSAKeyUsage" 2>&1) || FAIL=1
 echo "$output" | grep "Performed tests: 4" || FAIL=1
 if [ $FAIL -ne 0 ]; then
     echo

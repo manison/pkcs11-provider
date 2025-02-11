@@ -101,6 +101,7 @@ static int p11prov_rsa_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
     struct p11prov_encoder_ctx *ctx = (struct p11prov_encoder_ctx *)inctx;
     P11PROV_OBJ *key = (P11PROV_OBJ *)inkey;
     CK_KEY_TYPE type;
+    CK_OBJECT_CLASS class;
     CK_ULONG keysize;
     char *uri = NULL;
     BIO *out;
@@ -113,6 +114,7 @@ static int p11prov_rsa_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
         P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Invalid Key Type");
         return RET_OSSL_ERR;
     }
+    class = p11prov_obj_get_class(key);
 
     out = BIO_new_from_core_bio(p11prov_ctx_get_libctx(ctx->provctx), cbio);
     if (!out) {
@@ -123,17 +125,29 @@ static int p11prov_rsa_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
     keysize = p11prov_obj_get_key_bit_size(key);
 
     if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
-        CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
         if (class != CKO_PRIVATE_KEY) {
-            return RET_OSSL_ERR;
+            BIO_printf(out, "[Error: Invalid key data]\n");
+            goto done;
         }
         BIO_printf(out, "PKCS11 RSA Private Key (%lu bits)\n", keysize);
         BIO_printf(out, "[Can't export and print private key data]\n");
     }
 
     if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        if (class != CKO_PUBLIC_KEY) {
+            P11PROV_OBJ *assoc;
+
+            assoc = p11prov_obj_find_associated(key, CKO_PUBLIC_KEY);
+            if (!assoc) {
+                BIO_printf(out, "[Error: Failed to source public key data]\n");
+                goto done;
+            }
+
+            /* replace key before printing the rest */
+            key = assoc;
+        }
         BIO_printf(out, "PKCS11 RSA Public Key (%lu bits)\n", keysize);
-        ret = p11prov_obj_export_public_key(key, CKK_RSA, true,
+        ret = p11prov_obj_export_public_key(key, CKK_RSA, true, false,
                                             p11prov_rsa_print_public_key, out);
         if (ret != RET_OSSL_OK) {
             BIO_printf(out, "[Error: Failed to decode public key data]\n");
@@ -143,9 +157,13 @@ static int p11prov_rsa_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
     uri = p11prov_key_to_uri(ctx->provctx, key);
     if (uri) {
         BIO_printf(out, "URI %s\n", uri);
-        free(uri);
+        OPENSSL_free(uri);
     }
 
+done:
+    if (key != inkey) {
+        p11prov_obj_free(key);
+    }
     BIO_free(out);
     return RET_OSSL_OK;
 }
@@ -222,7 +240,7 @@ static P11PROV_RSA_PUBKEY *p11prov_rsa_pubkey_to_asn1(P11PROV_OBJ *key)
         return NULL;
     }
 
-    ret = p11prov_obj_export_public_key(key, CKK_RSA, true,
+    ret = p11prov_obj_export_public_key(key, CKK_RSA, true, false,
                                         p11prov_rsa_set_asn1key_data, asn1key);
 
     if (ret != RET_OSSL_OK) {
@@ -256,7 +274,8 @@ static X509_PUBKEY *p11prov_rsa_pubkey_to_x509(P11PROV_OBJ *key)
     X509_PUBKEY *pubkey;
     unsigned char *der = NULL;
     int derlen = 0;
-    int ret;
+    int ret, nid, ptype;
+    ASN1_STRING *pval = NULL;
 
     ret = p11prov_rsa_pubkey_to_der(key, &der, &derlen);
     if (ret != RET_OSSL_OK) {
@@ -269,8 +288,19 @@ static X509_PUBKEY *p11prov_rsa_pubkey_to_x509(P11PROV_OBJ *key)
         return NULL;
     }
 
-    ret = X509_PUBKEY_set0_param(pubkey, OBJ_nid2obj(NID_rsaEncryption),
-                                 V_ASN1_NULL, NULL, der, derlen);
+    if (p11prov_obj_is_rsa_pss(key)) {
+        nid = NID_rsassaPss;
+        /* This is RSA-PSS key without additional restrictions */
+        pval = NULL;
+        ptype = V_ASN1_UNDEF;
+        /* TODO implement restrictions here based on ALLOWED_MECHANISMS */
+    } else {
+        /* this is generic RSA key without restrictions */
+        nid = NID_rsaEncryption;
+        ptype = V_ASN1_NULL;
+    }
+    ret = X509_PUBKEY_set0_param(pubkey, OBJ_nid2obj(nid), ptype, pval, der,
+                                 derlen);
     if (ret != RET_OSSL_OK) {
         OPENSSL_free(der);
         X509_PUBKEY_free(pubkey);
@@ -660,7 +690,7 @@ static X509_PUBKEY *p11prov_ec_pubkey_to_x509(P11PROV_OBJ *key)
     int ret;
 
     ret = p11prov_obj_export_public_key(
-        key, CKK_EC, true, p11prov_ec_set_keypoint_data, &keypoint);
+        key, CKK_EC, true, false, p11prov_ec_set_keypoint_data, &keypoint);
     if (ret != RET_OSSL_OK) {
         ecdsa_key_point_free(&keypoint);
         return NULL;
@@ -858,6 +888,7 @@ static int p11prov_ec_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
     struct p11prov_encoder_ctx *ctx = (struct p11prov_encoder_ctx *)inctx;
     P11PROV_OBJ *key = (P11PROV_OBJ *)inkey;
     CK_KEY_TYPE type;
+    CK_OBJECT_CLASS class;
     CK_ULONG keysize;
     char *uri = NULL;
     BIO *out;
@@ -870,6 +901,7 @@ static int p11prov_ec_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
         P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Invalid Key Type");
         return RET_OSSL_ERR;
     }
+    class = p11prov_obj_get_class(key);
 
     out = BIO_new_from_core_bio(p11prov_ctx_get_libctx(ctx->provctx), cbio);
     if (!out) {
@@ -879,17 +911,29 @@ static int p11prov_ec_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
 
     keysize = p11prov_obj_get_key_bit_size(key);
     if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
-        CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
         if (class != CKO_PRIVATE_KEY) {
-            return RET_OSSL_ERR;
+            BIO_printf(out, "[Error: Invalid key data]\n");
+            goto done;
         }
         BIO_printf(out, "PKCS11 EC Private Key (%lu bits)\n", keysize);
         BIO_printf(out, "[Can't export and print private key data]\n");
     }
 
     if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        if (class != CKO_PUBLIC_KEY) {
+            P11PROV_OBJ *assoc;
+
+            assoc = p11prov_obj_find_associated(key, CKO_PUBLIC_KEY);
+            if (!assoc) {
+                BIO_printf(out, "[Error: Failed to source public key data]\n");
+                goto done;
+            }
+
+            /* replace key before printing the rest */
+            key = assoc;
+        }
         BIO_printf(out, "PKCS11 EC Public Key (%lu bits)\n", keysize);
-        ret = p11prov_obj_export_public_key(key, CKK_EC, true,
+        ret = p11prov_obj_export_public_key(key, CKK_EC, true, false,
                                             p11prov_ec_print_public_key, out);
         if (ret != RET_OSSL_OK) {
             BIO_printf(out, "[Error: Failed to decode public key data]\n");
@@ -899,9 +943,13 @@ static int p11prov_ec_encoder_encode_text(void *inctx, OSSL_CORE_BIO *cbio,
     uri = p11prov_key_to_uri(ctx->provctx, key);
     if (uri) {
         BIO_printf(out, "URI %s\n", uri);
+        OPENSSL_free(uri);
     }
 
-    OPENSSL_free(uri);
+done:
+    if (key != inkey) {
+        p11prov_obj_free(key);
+    }
     BIO_free(out);
     return RET_OSSL_OK;
 }
@@ -969,8 +1017,9 @@ static int p11prov_ec_edwards_encoder_encode_text(
     struct p11prov_encoder_ctx *ctx = (struct p11prov_encoder_ctx *)inctx;
     P11PROV_OBJ *key = (P11PROV_OBJ *)inkey;
     CK_KEY_TYPE type;
+    CK_OBJECT_CLASS class;
     CK_ULONG keysize;
-    const char *type_name = "ED25519";
+    const char *type_name = ED25519;
     char *uri = NULL;
     BIO *out;
     int ret;
@@ -982,6 +1031,7 @@ static int p11prov_ec_edwards_encoder_encode_text(
         P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR, "Invalid Key Type");
         return RET_OSSL_ERR;
     }
+    class = p11prov_obj_get_class(key);
 
     out = BIO_new_from_core_bio(p11prov_ctx_get_libctx(ctx->provctx), cbio);
     if (!out) {
@@ -990,13 +1040,13 @@ static int p11prov_ec_edwards_encoder_encode_text(
     }
 
     keysize = p11prov_obj_get_key_bit_size(key);
-    if (keysize == 448) {
-        type_name = "ED448";
+    if (keysize == ED448_BIT_SIZE) {
+        type_name = ED448;
     }
     if (selection & OSSL_KEYMGMT_SELECT_PRIVATE_KEY) {
-        CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
         if (class != CKO_PRIVATE_KEY) {
-            return RET_OSSL_ERR;
+            BIO_printf(out, "[Error: Invalid key data]\n");
+            goto done;
         }
         BIO_printf(out, "PKCS11 %s Private Key (%lu bits)\n", type_name,
                    keysize);
@@ -1004,9 +1054,21 @@ static int p11prov_ec_edwards_encoder_encode_text(
     }
 
     if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        if (class != CKO_PUBLIC_KEY) {
+            P11PROV_OBJ *assoc;
+
+            assoc = p11prov_obj_find_associated(key, CKO_PUBLIC_KEY);
+            if (!assoc) {
+                BIO_printf(out, "[Error: Failed to source public key data]\n");
+                goto done;
+            }
+
+            /* replace key before printing the rest */
+            key = assoc;
+        }
         BIO_printf(out, "PKCS11 %s Public Key (%lu bits)\n", type_name,
                    keysize);
-        ret = p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true,
+        ret = p11prov_obj_export_public_key(key, CKK_EC_EDWARDS, true, false,
                                             p11prov_ec_print_public_key, out);
         /* FIXME if we want print in different format */
         if (ret != RET_OSSL_OK) {
@@ -1017,9 +1079,13 @@ static int p11prov_ec_edwards_encoder_encode_text(
     uri = p11prov_key_to_uri(ctx->provctx, key);
     if (uri) {
         BIO_printf(out, "URI %s\n", uri);
+        OPENSSL_free(uri);
     }
 
-    OPENSSL_free(uri);
+done:
+    if (key != inkey) {
+        p11prov_obj_free(key);
+    }
     BIO_free(out);
     return RET_OSSL_OK;
 }
