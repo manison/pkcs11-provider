@@ -33,6 +33,8 @@ void p11prov_obj_to_store_reference(P11PROV_OBJ *obj, void **reference,
 P11PROV_OBJ *p11prov_obj_from_reference(const void *reference,
                                         size_t reference_sz);
 P11PROV_CTX *p11prov_obj_get_prov_ctx(P11PROV_OBJ *obj);
+P11PROV_OBJ *p11prov_obj_get_associated(P11PROV_OBJ *obj);
+void p11prov_obj_set_associated(P11PROV_OBJ *obj, P11PROV_OBJ *assoc);
 
 typedef CK_RV (*store_obj_callback)(void *, P11PROV_OBJ *);
 CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
@@ -54,8 +56,8 @@ CK_RV p11prov_obj_set_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
 const char *p11prov_obj_get_ec_group_name(P11PROV_OBJ *obj);
 bool p11prov_obj_get_ec_compressed(P11PROV_OBJ *obj);
 int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
-                                  bool search_related, OSSL_CALLBACK *cb_fn,
-                                  void *cb_arg);
+                                  bool search_related, bool params_only,
+                                  OSSL_CALLBACK *cb_fn, void *cb_arg);
 int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
                                   CK_ATTRIBUTE **pub_y);
 int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub);
@@ -81,8 +83,8 @@ CK_RV p11prov_obj_copy_specific_attr(P11PROV_OBJ *pub_key,
                                      P11PROV_OBJ *priv_key,
                                      CK_ATTRIBUTE_TYPE type);
 
-CK_RV p11prov_merge_pub_attrs_into_priv(P11PROV_OBJ *pub_key,
-                                        P11PROV_OBJ *priv_key);
+P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
+                                         CK_OBJECT_CLASS class);
 
 #define ED25519 "ED25519"
 #define ED25519_BIT_SIZE 256

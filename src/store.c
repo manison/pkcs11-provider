@@ -97,7 +97,8 @@ static void store_fetch(struct p11prov_store_ctx *ctx,
         || login_behavior == PUBKEY_LOGIN_ALWAYS) {
         login = true;
     }
-    if (p11prov_uri_get_class(ctx->parsed_uri) == CKO_PUBLIC_KEY
+    if ((p11prov_uri_get_class(ctx->parsed_uri) == CKO_PUBLIC_KEY
+         || p11prov_uri_get_class(ctx->parsed_uri) == CKO_CERTIFICATE)
         && login_behavior != PUBKEY_LOGIN_ALWAYS) {
         login = false;
     }
@@ -470,7 +471,7 @@ static int p11prov_store_export_object(void *loaderctx, const void *reference,
 
     /* we can only export public bits, so that's all we do */
     return p11prov_obj_export_public_key(obj, CK_UNAVAILABLE_INFORMATION, false,
-                                         cb_fn, cb_arg);
+                                         false, cb_fn, cb_arg);
 }
 
 static const OSSL_PARAM *p11prov_store_settable_ctx_params(void *provctx)

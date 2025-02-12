@@ -52,6 +52,8 @@ struct p11prov_obj {
 
     int refcnt;
     int poolid;
+
+    P11PROV_OBJ *assoc_obj;
 };
 
 struct p11prov_obj_pool {
@@ -454,6 +456,8 @@ void p11prov_obj_free(P11PROV_OBJ *obj)
 
     p11prov_uri_free(obj->refresh_uri);
 
+    p11prov_obj_free(obj->assoc_obj);
+
     OPENSSL_clear_free(obj, sizeof(P11PROV_OBJ));
 }
 
@@ -641,6 +645,27 @@ P11PROV_CTX *p11prov_obj_get_prov_ctx(P11PROV_OBJ *obj)
         return NULL;
     }
     return obj->ctx;
+}
+
+P11PROV_OBJ *p11prov_obj_get_associated(P11PROV_OBJ *obj)
+{
+    return obj->assoc_obj;
+}
+
+void p11prov_obj_set_associated(P11PROV_OBJ *obj, P11PROV_OBJ *assoc)
+{
+    if (obj == NULL) {
+        return;
+    }
+
+    p11prov_obj_free(obj->assoc_obj);
+    obj->assoc_obj = NULL;
+
+    if (assoc == NULL) {
+        return;
+    }
+
+    obj->assoc_obj = p11prov_obj_ref_no_cache(assoc);
 }
 
 /* CKA_ID
@@ -889,7 +914,7 @@ static CK_RV fetch_ec_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     } else {
         /* known vendor optimization to avoid storing
          * EC public key on HSM; can avoid
-         * find_associated_obj later
+         * p11prov_obj_find_associated later
          */
         FA_SET_BUF_ALLOC(attrs, num, CKA_EC_POINT, false);
         FA_SET_BUF_ALLOC(attrs, num, CKA_ALWAYS_AUTHENTICATE, false);
@@ -1168,8 +1193,8 @@ CK_RV p11prov_obj_find(P11PROV_CTX *provctx, P11PROV_SESSION *session,
     return result;
 }
 
-static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
-                                        CK_OBJECT_CLASS class)
+P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
+                                         CK_OBJECT_CLASS class)
 {
     CK_ATTRIBUTE template[2] = { 0 };
     CK_ATTRIBUTE *id;
@@ -1183,9 +1208,21 @@ static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
 
     P11PROV_debug("Find associated object");
 
+    /* check if we have one already */
+    retobj = p11prov_obj_get_associated(obj);
+    if (retobj) {
+        if (p11prov_obj_get_class(retobj) == class) {
+            /* BINGO */
+            return p11prov_obj_ref_no_cache(retobj);
+        } else {
+            retobj = NULL;
+        }
+    }
+
     id = p11prov_obj_get_attr(obj, CKA_ID);
     if (!id || id->ulValueLen == 0) {
-        P11PROV_raise(provctx, CKR_GENERAL_ERROR, "No CKA_ID in source object");
+        P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR,
+                      "No CKA_ID in source object");
         goto done;
     }
 
@@ -1194,7 +1231,7 @@ static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
 
     slotid = p11prov_obj_get_slotid(obj);
 
-    ret = p11prov_get_session(provctx, &slotid, NULL, NULL,
+    ret = p11prov_get_session(obj->ctx, &slotid, NULL, NULL,
                               CK_UNAVAILABLE_INFORMATION, NULL, NULL, true,
                               false, &session);
     if (ret != CKR_OK) {
@@ -1203,32 +1240,37 @@ static P11PROV_OBJ *find_associated_obj(P11PROV_CTX *provctx, P11PROV_OBJ *obj,
 
     sess = p11prov_session_handle(session);
 
-    ret = p11prov_FindObjectsInit(provctx, sess, template, 2);
+    ret = p11prov_FindObjectsInit(obj->ctx, sess, template, 2);
     if (ret != CKR_OK) {
         goto done;
     }
 
     /* we expect a single entry */
-    ret = p11prov_FindObjects(provctx, sess, &handle, 1, &objcount);
+    ret = p11prov_FindObjects(obj->ctx, sess, &handle, 1, &objcount);
 
-    fret = p11prov_FindObjectsFinal(provctx, sess);
+    fret = p11prov_FindObjectsFinal(obj->ctx, sess);
     if (fret != CKR_OK) {
         /* this is not fatal */
-        P11PROV_raise(provctx, fret, "Failed to terminate object search");
+        P11PROV_raise(obj->ctx, fret, "Failed to terminate object search");
     }
 
     if (ret != CKR_OK) {
         goto done;
     }
     if (objcount != 1) {
-        P11PROV_raise(provctx, ret, "Error in C_FindObjects (count=%ld)",
+        P11PROV_raise(obj->ctx, ret, "Error in C_FindObjects (count=%ld)",
                       objcount);
         goto done;
     }
 
-    ret = p11prov_obj_from_handle(provctx, session, handle, &retobj);
+    ret = p11prov_obj_from_handle(obj->ctx, session, handle, &retobj);
     if (ret != CKR_OK) {
-        P11PROV_raise(provctx, ret, "Failed to get object from handle");
+        P11PROV_raise(obj->ctx, ret, "Failed to get object from handle");
+    }
+
+    /* associate it so we do not have to search again on repeat calls */
+    if (retobj && obj->assoc_obj == NULL) {
+        obj->assoc_obj = p11prov_obj_ref_no_cache(retobj);
     }
 
 done:
@@ -1341,6 +1383,11 @@ static void p11prov_obj_refresh(P11PROV_OBJ *obj)
      * cause use-after-free issues */
     p11prov_obj_free(tmp);
     obj->raf = false;
+
+    /* Refresh the associated object too if there is one */
+    if (obj->assoc_obj && obj->assoc_obj->raf) {
+        p11prov_obj_refresh(obj->assoc_obj);
+    }
 
 done:
     p11prov_return_session(session);
@@ -1720,14 +1767,14 @@ static CK_RV get_public_attrs(P11PROV_OBJ *obj, CK_ATTRIBUTE *attrs, int num)
             return rv;
         }
         /* public attributes unavailable, try to find public key */
-        tmp = find_associated_obj(obj->ctx, obj, CKO_PUBLIC_KEY);
+        tmp = p11prov_obj_find_associated(obj, CKO_PUBLIC_KEY);
         if (tmp) {
             rv = get_all_attrs(tmp, attrs, num);
             p11prov_obj_free(tmp);
             return rv;
         }
         /* no public key, try to find certificate */
-        tmp = find_associated_obj(obj->ctx, obj, CKO_CERTIFICATE);
+        tmp = p11prov_obj_find_associated(obj, CKO_CERTIFICATE);
         if (tmp) {
             rv = get_all_from_cert(tmp, attrs, num);
             p11prov_obj_free(tmp);
@@ -1817,7 +1864,13 @@ bool p11prov_obj_get_ec_compressed(P11PROV_OBJ *obj)
 
     pub_key = p11prov_obj_get_attr(obj, CKA_P11PROV_PUB_KEY);
     if (!pub_key) {
-        return false;
+        obj = p11prov_obj_get_associated(obj);
+        if (obj) {
+            pub_key = p11prov_obj_get_attr(obj, CKA_P11PROV_PUB_KEY);
+        }
+        if (!pub_key) {
+            return false;
+        }
     }
     buf = pub_key->pValue;
 
@@ -1966,12 +2019,13 @@ static int ec_group_explicit_to_params(P11PROV_OBJ *obj, const EC_GROUP *group,
  */
 #define EC_MAX_PUB_ATTRS 2
 #define EC_MAX_OSSL_PARAMS 9
-static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
+static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj, bool params_only,
                                             OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     CK_ATTRIBUTE attrs[EC_MAX_PUB_ATTRS] = { 0 };
     OSSL_PARAM params[EC_MAX_OSSL_PARAMS + 1] = { 0 };
     CK_KEY_TYPE key_type;
+    int pub_key_attr = 0;
     int nattr = 0;
     int nparam = 0;
     CK_RV rv;
@@ -1990,20 +2044,23 @@ static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
         }
         curve_nid = *(int *)attrs[0].pValue;
         OPENSSL_free(attrs[0].pValue);
-        attrs[0].type = CKA_P11PROV_PUB_KEY;
         if (curve_nid == NID_undef) {
-            attrs[1].type = CKA_EC_PARAMS;
+            attrs[0].type = CKA_EC_PARAMS;
         } else {
-            attrs[1].type = CKA_P11PROV_CURVE_NAME;
+            attrs[0].type = CKA_P11PROV_CURVE_NAME;
         }
-        nattr = 2;
+        nattr = 1;
         break;
     case CKK_EC_EDWARDS:
-        attrs[0].type = CKA_P11PROV_PUB_KEY;
-        nattr = 1;
         break;
     default:
         return RET_OSSL_ERR;
+    }
+
+    if (!params_only) {
+        pub_key_attr = nattr;
+        attrs[nattr].type = CKA_P11PROV_PUB_KEY;
+        nattr++;
     }
 
     rv = get_public_attrs(obj, attrs, nattr);
@@ -2012,9 +2069,12 @@ static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
         return RET_OSSL_ERR;
     }
 
-    params[nparam] = OSSL_PARAM_construct_octet_string(
-        OSSL_PKEY_PARAM_PUB_KEY, attrs[0].pValue, attrs[0].ulValueLen);
-    nparam++;
+    if (!params_only) {
+        params[nparam] = OSSL_PARAM_construct_octet_string(
+            OSSL_PKEY_PARAM_PUB_KEY, attrs[pub_key_attr].pValue,
+            attrs[pub_key_attr].ulValueLen);
+        nparam++;
+    }
     if (key_type == CKK_EC) {
         if (curve_nid == NID_undef) {
             BN_CTX *bnctx;
@@ -2022,8 +2082,8 @@ static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
             /* in d2i functions 'in' is overwritten to return the remainder of
              * the buffer after parsing, so we always need to avoid passing in
              * our pointer holders, to avoid having them clobbered */
-            const unsigned char *val = attrs[1].pValue;
-            group = d2i_ECPKParameters(NULL, &val, attrs[1].ulValueLen);
+            const unsigned char *val = attrs[0].pValue;
+            group = d2i_ECPKParameters(NULL, &val, attrs[0].ulValueLen);
             if (group == NULL) {
                 ret = RET_OSSL_ERR;
                 goto done;
@@ -2043,8 +2103,8 @@ static int p11prov_obj_export_public_ec_key(P11PROV_OBJ *obj,
             }
         } else {
             params[nparam] = OSSL_PARAM_construct_utf8_string(
-                OSSL_PKEY_PARAM_GROUP_NAME, attrs[1].pValue,
-                attrs[1].ulValueLen);
+                OSSL_PKEY_PARAM_GROUP_NAME, attrs[0].pValue,
+                attrs[0].ulValueLen);
             nparam++;
         }
     }
@@ -2069,8 +2129,8 @@ done:
 }
 
 int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
-                                  bool search_related, OSSL_CALLBACK *cb_fn,
-                                  void *cb_arg)
+                                  bool search_related, bool params_only,
+                                  OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     if (obj == NULL) {
         return RET_OSSL_ERR;
@@ -2098,7 +2158,8 @@ int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
         return p11prov_obj_export_public_rsa_key(obj, cb_fn, cb_arg);
     case CKK_EC:
     case CKK_EC_EDWARDS:
-        return p11prov_obj_export_public_ec_key(obj, cb_fn, cb_arg);
+        return p11prov_obj_export_public_ec_key(obj, params_only, cb_fn,
+                                                cb_arg);
     default:
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
         return RET_OSSL_ERR;
@@ -2123,6 +2184,15 @@ int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub)
     if (obj->data.key.type != CKK_EC_EDWARDS) {
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
         return RET_OSSL_ERR;
+    }
+
+    /* check if we have a pub key associated to a private key */
+    if (obj->class == CKO_PRIVATE_KEY) {
+        P11PROV_OBJ *pobj = p11prov_obj_get_associated(obj);
+        if (pobj && pobj->class == CKO_PUBLIC_KEY) {
+            /* replace obj with the public one */
+            obj = pobj;
+        }
     }
 
     /* See if we have cached attributes first */
@@ -2166,6 +2236,15 @@ int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
     if (obj->data.key.type != CKK_EC) {
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
         return RET_OSSL_ERR;
+    }
+
+    /* check if we have a pub key associated to a private key */
+    if (obj->class == CKO_PRIVATE_KEY) {
+        P11PROV_OBJ *pub = p11prov_obj_get_associated(obj);
+        if (pub && pub->class == CKO_PUBLIC_KEY) {
+            /* replace obj with the public one */
+            obj = pub;
+        }
     }
 
     /* See if we have cached attributes first */
@@ -2304,6 +2383,15 @@ CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key)
         return NULL;
     }
 
+    /* check if we have a pub key associated to a private key */
+    if (key->class == CKO_PRIVATE_KEY) {
+        P11PROV_OBJ *pub = p11prov_obj_get_associated(key);
+        if (pub && pub->class == CKO_PUBLIC_KEY) {
+            /* replace obj with the public one */
+            key = pub;
+        }
+    }
+
     pub_key = p11prov_obj_get_attr(key, CKA_P11PROV_PUB_KEY);
     if (!pub_key) {
         CK_ATTRIBUTE *ec_point;
@@ -2398,7 +2486,7 @@ static int match_key_with_cert(P11PROV_OBJ *priv_key, P11PROV_OBJ *pub_key)
     int num = 0;
     int ret = RET_OSSL_ERR;
 
-    cert = find_associated_obj(priv_key->ctx, priv_key, CKO_CERTIFICATE);
+    cert = p11prov_obj_find_associated(priv_key, CKO_CERTIFICATE);
     if (!cert) {
         P11PROV_raise(priv_key->ctx, CKR_GENERAL_ERROR,
                       "Could not find associated certificate object");
@@ -2494,8 +2582,7 @@ static int match_public_keys(P11PROV_OBJ *key1, P11PROV_OBJ *key2)
         return RET_OSSL_ERR;
     }
 
-    assoc_pub_key =
-        find_associated_obj(priv_key->ctx, priv_key, CKO_PUBLIC_KEY);
+    assoc_pub_key = p11prov_obj_find_associated(priv_key, CKO_PUBLIC_KEY);
     if (!assoc_pub_key) {
         P11PROV_raise(priv_key->ctx, CKR_GENERAL_ERROR,
                       "Could not find associated public key object");
@@ -3263,6 +3350,12 @@ static CK_RV return_dup_key(P11PROV_OBJ *dst, P11PROV_OBJ *src)
     dst->cka_token = src->cka_token;
     dst->data.key = src->data.key;
 
+    /* Free existing attributes if any */
+    for (int i = 0; i < dst->numattrs; i++) {
+        OPENSSL_free(dst->attrs[i].pValue);
+    }
+    OPENSSL_free(dst->attrs);
+
     dst->attrs = OPENSSL_zalloc(sizeof(CK_ATTRIBUTE) * src->numattrs);
     if (!dst->attrs) {
         rv = CKR_HOST_MEMORY;
@@ -3975,6 +4068,152 @@ done:
     return rv;
 }
 
+static CK_RV import_ec_params(P11PROV_OBJ *key, const OSSL_PARAM params[])
+{
+    P11PROV_CTX *ctx;
+    EC_GROUP *group = NULL;
+    const char *curve_name = NULL;
+    int curve_nid;
+    unsigned char *ecparams = NULL;
+    CK_ATTRIBUTE *cka_ec_params;
+    CK_ATTRIBUTE *cka_nid;
+    CK_ATTRIBUTE *cka_name;
+    CK_ATTRIBUTE tmp;
+    int add_attrs = 0;
+    int len;
+    CK_RV rv;
+
+    ctx = p11prov_obj_get_prov_ctx(key);
+    if (!ctx) {
+        return CKR_GENERAL_ERROR;
+    }
+
+    group = EC_GROUP_new_from_params(params, p11prov_ctx_get_libctx(ctx), NULL);
+    if (!group) {
+        P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unable to decode ec group");
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
+    }
+
+    curve_nid = EC_GROUP_get_curve_name(group);
+    if (curve_nid == NID_undef) {
+        curve_name = OSSL_EC_curve_nid2name(curve_nid);
+        if (!curve_name) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+    }
+
+    len = i2d_ECPKParameters(group, &ecparams);
+    if (len < 0) {
+        P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Failed to encode EC params");
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
+    }
+
+    cka_ec_params = p11prov_obj_get_attr(key, CKA_EC_PARAMS);
+    if (!cka_ec_params) {
+        add_attrs += 1;
+    }
+
+    cka_nid = p11prov_obj_get_attr(key, CKA_P11PROV_CURVE_NID);
+    if (!cka_nid) {
+        add_attrs += 1;
+    }
+
+    cka_name = p11prov_obj_get_attr(key, CKA_P11PROV_CURVE_NAME);
+    if (!cka_name && curve_name) {
+        add_attrs += 1;
+    }
+
+    if (add_attrs > 0) {
+        void *tmp_ptr;
+        tmp_ptr = OPENSSL_realloc(
+            key->attrs, sizeof(CK_ATTRIBUTE) * (key->numattrs + add_attrs));
+        if (!tmp_ptr) {
+            rv = CKR_HOST_MEMORY;
+            goto done;
+        }
+        key->attrs = tmp_ptr;
+    }
+
+    /* EC Params */
+    if (cka_ec_params) {
+        OPENSSL_free(cka_ec_params->pValue);
+    } else {
+        cka_ec_params = &key->attrs[key->numattrs];
+        key->numattrs++;
+    }
+    cka_ec_params->type = CKA_EC_PARAMS;
+    cka_ec_params->pValue = ecparams;
+    ecparams = NULL;
+    cka_ec_params->ulValueLen = len;
+
+    /* Curve Nid */
+    if (cka_nid) {
+        OPENSSL_free(cka_nid->pValue);
+    } else {
+        cka_nid = &key->attrs[key->numattrs];
+        key->numattrs++;
+    }
+    cka_nid->pValue = NULL;
+    tmp.type = CKA_P11PROV_CURVE_NID;
+    tmp.pValue = &curve_nid;
+    tmp.ulValueLen = sizeof(curve_nid);
+    rv = p11prov_copy_attr(cka_nid, &tmp);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    /* Curve name */
+    if (cka_name) {
+        OPENSSL_free(cka_name->pValue);
+        cka_name->type = CK_UNAVAILABLE_INFORMATION;
+        cka_name->pValue = NULL;
+        cka_name->ulValueLen = 0;
+    }
+    if (curve_name) {
+        if (!cka_name) {
+            cka_name = &key->attrs[key->numattrs];
+            key->numattrs++;
+        }
+        tmp.type = CKA_P11PROV_CURVE_NAME;
+        tmp.pValue = (void *)curve_name;
+        tmp.ulValueLen = strlen(curve_name) + 1;
+        rv = p11prov_copy_attr(cka_name, &tmp);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+    }
+
+    /* This is geneally the first call when importing keys from OpenSSL,
+     * so ensure the other common object parameters are correct as well */
+    key->data.key.type = CKK_EC;
+    key->data.key.bit_size = EC_GROUP_order_bits(group);
+    key->data.key.size = (key->data.key.bit_size + 7) / 8;
+
+done:
+    OPENSSL_free(ecparams);
+    EC_GROUP_free(group);
+    return rv;
+}
+
+static CK_RV p11prov_obj_set_domain_params(P11PROV_OBJ *key, CK_KEY_TYPE type,
+                                           const OSSL_PARAM params[])
+{
+    switch (type) {
+    case CKK_EC:
+        /* EC_PARAMS */
+        return import_ec_params(key, params);
+
+    default:
+        P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
+                      "Unsupported key type: %08lx", type);
+        return CKR_KEY_INDIGESTIBLE;
+    }
+}
+
 CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
                              CK_OBJECT_CLASS class, const OSSL_PARAM params[])
 {
@@ -3990,6 +4229,8 @@ CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         return p11prov_obj_import_public_key(key, type, params);
     case CKO_PRIVATE_KEY:
         return p11prov_obj_import_private_key(key, type, params);
+    case CKO_DOMAIN_PARAMETERS:
+        return p11prov_obj_set_domain_params(key, type, params);
     default:
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                       "Invalid object class or key type");
@@ -4013,11 +4254,16 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
     if (key->handle != CK_P11PROV_IMPORTED_HANDLE) {
         /*
          * not a mock object, cannot set public key to a token object backed by
-         * an actual handle
+         * an actual handle.
          */
+        /* not matching, error out */
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                       "Cannot change public key of a token object");
         return CKR_KEY_INDIGESTIBLE;
+    }
+
+    if (key->class == CK_UNAVAILABLE_INFORMATION) {
+        key->class = CKO_PUBLIC_KEY;
     }
 
     switch (key->data.key.type) {
@@ -4125,87 +4371,6 @@ CK_RV p11prov_obj_copy_specific_attr(P11PROV_OBJ *pub_key,
     priv_key->numattrs++;
 
     return ret;
-}
-
-/*
- *Copy attributes from public key to private key
- *so that the public key can be reconstructed from
- *a private key directly.
- */
-#define RSA_PRIV_ATTRS_NUM 2
-
-#define EC_PRIV_ATTRS_NUM 3
-CK_RV p11prov_merge_pub_attrs_into_priv(P11PROV_OBJ *pub_key,
-                                        P11PROV_OBJ *priv_key)
-{
-    CK_RV ret = CKR_OK;
-
-    if (!pub_key || !priv_key) {
-        P11PROV_debug(
-            "Empty keys. Cannot copy public key attributes into private key");
-        return CKR_ARGUMENTS_BAD;
-    }
-
-    switch (pub_key->data.key.type) {
-    case CKK_RSA:
-        priv_key->attrs = OPENSSL_realloc(
-            priv_key->attrs,
-            (priv_key->numattrs + RSA_PRIV_ATTRS_NUM) * sizeof(CK_ATTRIBUTE));
-        if (!priv_key->attrs) {
-            ret = CKR_HOST_MEMORY;
-            P11PROV_raise(priv_key->ctx, ret, "Failed allocation");
-            return ret;
-        }
-
-        ret = p11prov_obj_copy_specific_attr(pub_key, priv_key, CKA_MODULUS);
-        if (ret != CKR_OK) {
-            goto err;
-        }
-
-        ret = p11prov_obj_copy_specific_attr(pub_key, priv_key,
-                                             CKA_PUBLIC_EXPONENT);
-        if (ret != CKR_OK) {
-            goto err;
-        }
-        break;
-    case CKK_EC:
-    case CKK_EC_EDWARDS:
-        priv_key->attrs = OPENSSL_realloc(
-            priv_key->attrs,
-            (priv_key->numattrs + EC_PRIV_ATTRS_NUM) * sizeof(CK_ATTRIBUTE));
-        if (!priv_key->attrs) {
-            ret = CKR_HOST_MEMORY;
-            P11PROV_raise(priv_key->ctx, ret, "Failed allocation");
-            return ret;
-        }
-
-        ret = p11prov_obj_copy_specific_attr(pub_key, priv_key, CKA_EC_POINT);
-        if (ret != CKR_OK) {
-            goto err;
-        }
-
-        ret = p11prov_obj_copy_specific_attr(pub_key, priv_key, CKA_EC_PARAMS);
-        if (ret != CKR_OK) {
-            goto err;
-        }
-
-        ret = p11prov_obj_copy_specific_attr(pub_key, priv_key,
-                                             CKA_P11PROV_PUB_KEY);
-        if (ret != CKR_OK) {
-            goto err;
-        }
-        break;
-    default:
-        /* unknown key type, we can't copy public key attributes */
-        P11PROV_debug("Unsupported key type (%lu)", pub_key->data.key.type);
-        return CKR_ARGUMENTS_BAD;
-    }
-
-    return ret;
-
-err:
-    P11PROV_raise(priv_key->ctx, ret, "Failed attr copy");
-    return CKR_GENERAL_ERROR;
 }
 
 /* creates an empty (no public point) Public EC Key, (OpenSSL paramgen
