@@ -10,3 +10,7 @@ include /usr/share/debhelper/dh_package_notes/package-notes.mk
 
 override_dh_auto_test:
 	dh_auto_test -- -t 10
+
+execute_before_dh_auto_build:
+	# meson test does not compile with verbosity, but doesn't matter as it's test binaries
+	@echo 'blhc: ignore-line-regexp: .* Compiling C object tests.*'
