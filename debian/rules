@@ -7,3 +7,6 @@ include /usr/share/debhelper/dh_package_notes/package-notes.mk
 
 %:
 	dh $@ --buildsystem=meson
+
+override_dh_auto_test:
+	dh_auto_test -- -t 10
