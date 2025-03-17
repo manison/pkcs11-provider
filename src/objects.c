@@ -110,8 +110,8 @@ void p11prov_obj_pool_free(P11PROV_OBJ_POOL *pool)
         }
         OPENSSL_free(pool->objects);
         (void)MUTEX_UNLOCK(pool);
-        /* ------------- LOCKED SECTION */ }
-    else {
+        /* ------------- LOCKED SECTION */
+    } else {
         P11PROV_debug("Failed to lock object pool, leaking it!");
         return;
     }
@@ -212,6 +212,11 @@ done:
     (void)MUTEX_UNLOCK(pool);
     /* ------------- LOCKED SECTION */
 
+    if (ret == CKR_OK) {
+        P11PROV_debug("Object added to pool (idx=%d, obj=%p)", obj->poolid,
+                      obj);
+    }
+
     return ret;
 }
 
@@ -219,6 +224,7 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
 {
     P11PROV_OBJ_POOL *pool;
     CK_RV ret;
+    const char *errstr = NULL;
 
     if (obj->slotid == CK_UNAVAILABLE_INFORMATION) {
         /* a mock object */
@@ -230,15 +236,21 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
         return;
     }
 
+    P11PROV_debug("Object to be removed from pool (idx=%d, obj=%p)",
+                  obj->poolid, obj);
+
     ret = MUTEX_LOCK(pool);
     if (ret != CKR_OK) {
         return;
     }
 
     /* LOCKED SECTION ------------- */
-    if (obj->poolid >= pool->size || pool->objects[obj->poolid] != obj) {
-        ret = CKR_GENERAL_ERROR;
-        P11PROV_raise(pool->provctx, ret, "Objects pool in inconsistent state");
+    if (obj->poolid >= pool->size) {
+        errstr = "small pool";
+        goto done;
+    }
+    if (pool->objects[obj->poolid] != obj) {
+        errstr = "obj already removed";
         goto done;
     }
 
@@ -252,6 +264,12 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
 done:
     (void)MUTEX_UNLOCK(pool);
     /* ------------- LOCKED SECTION */
+
+    if (errstr != NULL) {
+        P11PROV_raise(pool->provctx, ret,
+                      "Objects pool in inconsistent state - %s (obj=%p)",
+                      errstr, obj);
+    }
 }
 
 static CK_RV p11prov_obj_store_public_key(P11PROV_OBJ *key);
@@ -556,6 +574,7 @@ CK_KEY_TYPE p11prov_obj_get_key_type(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
             return obj->data.key.type;
         }
     }
@@ -566,12 +585,31 @@ bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj)
 {
     CK_ATTRIBUTE *am = p11prov_obj_get_attr(obj, CKA_ALLOWED_MECHANISMS);
     CK_MECHANISM_TYPE *allowed;
+    P11PROV_OBJ *priv = NULL;
     int am_nmechs;
 
     if (am == NULL || am->ulValueLen == 0) {
-        /* no limitations or no support for allowed mechs
-         * TODO we can try also certificate restrictions */
-        return false;
+        /* The ALLOWED_MECHANISMS should be on both of the keys. But more
+         * commonly they are available only on the private key. Check if we
+         * have a priv key associated to this pub key and if so, use that one.
+         * TODO we can try also certificate restrictions
+         */
+        if (obj->class == CKO_PRIVATE_KEY) {
+            /* no limitations or no support for allowed mechs */
+            return false;
+        }
+
+        priv = p11prov_obj_find_associated(obj, CKO_PRIVATE_KEY);
+        if (priv == NULL) {
+            return false;
+        }
+
+        am = p11prov_obj_get_attr(priv, CKA_ALLOWED_MECHANISMS);
+        if (am == NULL || am->ulValueLen == 0) {
+            /* no limitations or no support for allowed mechs */
+            p11prov_obj_free(priv);
+            return false;
+        }
     }
     allowed = (CK_MECHANISM_TYPE *)am->pValue;
     am_nmechs = am->ulValueLen / sizeof(CK_MECHANISM_TYPE);
@@ -586,10 +624,12 @@ bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj)
         if (!found) {
             /* this is not a RSA-PSS mechanism. We can not enforce any
              * limitations */
+            p11prov_obj_free(priv);
             return false;
         }
     }
     /* all allowed mechanisms fit into the list of RSA-PSS ones */
+    p11prov_obj_free(priv);
     return true;
 }
 
@@ -599,6 +639,7 @@ CK_ULONG p11prov_obj_get_key_bit_size(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
             return obj->data.key.bit_size;
         }
     }
@@ -611,6 +652,7 @@ CK_ULONG p11prov_obj_get_key_size(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
             return obj->data.key.size;
         }
     }
@@ -1824,15 +1866,17 @@ static int p11prov_obj_export_public_rsa_key(P11PROV_OBJ *obj,
     byteswap_buf(attrs[1].pValue, attrs[1].pValue, attrs[1].ulValueLen);
     params[n++] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_E,
                                           attrs[1].pValue, attrs[1].ulValueLen);
-    /* If this is an RSA-PSS limited key, OpenSSL need some more signs here.
+    /* TODO: Add RSA-PSS restrictions if there is only one allowed mechanisms.
      * The PKCS#11 specification is not compatible with what OpenSSL expects
      * (unless we would have just one mechanisms specified in
-     * ALLOWED_MECHANISMS) */
+     * ALLOWED_MECHANISMS) so its better to not add any restrictions now. */
+#if 0
     if (p11prov_obj_is_rsa_pss(obj)) {
         params[n++] = OSSL_PARAM_construct_utf8_string(
             OSSL_PKEY_PARAM_RSA_MASKGENFUNC, (char *)SN_mgf1, strlen(SN_mgf1));
-        /* TODO add the other params if restricted? */
+        /* TODO other restrictions */
     }
+#endif
     params[n++] = OSSL_PARAM_construct_end();
 
     ret = cb_fn(params, cb_arg);
@@ -3343,6 +3387,10 @@ static CK_RV return_dup_key(P11PROV_OBJ *dst, P11PROV_OBJ *src)
 {
     CK_RV rv;
 
+    P11PROV_debug("duplicating obj key (dst=%p, src=%p, handle=%lu, "
+                  "slotid=%lu, raf=%d, numattrs=%d)",
+                  dst, src, src->handle, src->slotid, src->raf, src->numattrs);
+
     dst->slotid = src->slotid;
     dst->handle = src->handle;
     dst->class = src->class;
@@ -3411,6 +3459,8 @@ static CK_RV fix_ec_key_import(P11PROV_OBJ *key, int allocattrs)
     key->attrs[key->numattrs].ulValueLen = len;
     key->numattrs++;
 
+    P11PROV_debug("fixing EC key %p import", key);
+
     return CKR_OK;
 }
 
@@ -3436,6 +3486,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
 
     switch (type) {
     case CKK_RSA:
+        P11PROV_debug("obj import of RSA public key %p", key);
         rv = prep_rsa_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
@@ -3444,6 +3495,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC:
+        P11PROV_debug("obj import of EC public key %p", key);
         rv = prep_ec_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
@@ -3452,6 +3504,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC_EDWARDS:
+        P11PROV_debug("obj import of ED public key %p", key);
         rv = prep_ed_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
@@ -3497,6 +3550,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
      * the key can be imported on the fly in the correct slot at the time the
      * operation needs to be performed.
      */
+    P11PROV_debug("public key %p not found in the pool - using mock", key);
 
     /* move data */
     key->class = findctx.class;
@@ -4226,10 +4280,13 @@ CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
 
     switch (class) {
     case CKO_PUBLIC_KEY:
+        key->class = CKO_PUBLIC_KEY;
         return p11prov_obj_import_public_key(key, type, params);
     case CKO_PRIVATE_KEY:
+        key->class = CKO_PRIVATE_KEY;
         return p11prov_obj_import_private_key(key, type, params);
     case CKO_DOMAIN_PARAMETERS:
+        key->class = CKO_DOMAIN_PARAMETERS;
         return p11prov_obj_set_domain_params(key, type, params);
     default:
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
@@ -4262,15 +4319,15 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
         return CKR_KEY_INDIGESTIBLE;
     }
 
-    if (key->class == CK_UNAVAILABLE_INFORMATION) {
-        key->class = CKO_PUBLIC_KEY;
-    }
-
     switch (key->data.key.type) {
     case CKK_EC:
     case CKK_EC_EDWARDS:
-        /* check that this is a public key */
-        if (key->class != CKO_PUBLIC_KEY) {
+        /* if class is still "domain parameters" convert it to
+         * a public key */
+        if (key->class == CKO_DOMAIN_PARAMETERS) {
+            key->class = CKO_PUBLIC_KEY;
+        } else if (key->class != CKO_PUBLIC_KEY) {
+            /* check that this is a public key */
             P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                           "Invalid Key type, not a public key");
             return CKR_KEY_INDIGESTIBLE;

@@ -34,18 +34,6 @@ if get_option('enable_explicit_EC_test')
   conf_env.set('ENABLE_EXPLICIT_EC_TEST', '1')
 endif
 
-setup_script=find_program('setup.sh')
-foreach suite : ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']
-  test(
-    'setup',
-    setup_script,
-    args: suite,
-    suite: suite,
-    env: conf_env,
-    is_parallel: false,
-  )
-endforeach
-
 test_env = environment({
   'TEST_PATH': meson.current_source_dir(),
   'TESTBLDDIR': meson.current_build_dir(),
@@ -69,6 +57,7 @@ if valgrind.found()
   )
 endif
 
+setup_deps = []
 if get_option('b_sanitize') == 'address'
   preload_libasan = get_option('preload_libasan')
   if preload_libasan == 'auto'
@@ -85,10 +74,7 @@ if get_option('b_sanitize') == 'address'
     'fake_dlclose.c',
     name_prefix: '',
   )
-
-  test_env.set('ASAN_OPTIONS', 'fast_unwind_on_malloc=0:detect_leaks=1')
-  test_env.set('LSAN_OPTIONS', 'suppressions=@0@/lsan.supp'.format(meson.current_source_dir()))
-  test_env.set('FAKE_DLCLOSE', fake_dlclose.full_path())
+  setup_deps += [fake_dlclose]
 
   preload_env_var = 'LD_PRELOAD'
   if host_machine.system() == 'darwin'
@@ -98,12 +84,23 @@ if get_option('b_sanitize') == 'address'
   # LD_PRELOAD is needed before invoking openssl as it is not instrumented with
   # asan and asan needs to be loaded as a first dynamic library of the process.
   if preload_libasan != 'no'
-    test_env.set('CHECKER', 'env @0@=@1@:@2@'.format(preload_env_var, preload_libasan, fake_dlclose.full_path()))
+    checker = 'env @0@=@1@:@2@'.format(preload_env_var, preload_libasan, fake_dlclose.full_path())
   else
-    test_env.set('CHECKER', 'env @0@=@1@'.format(preload_env_var, fake_dlclose.full_path()))
+    checker = 'env @0@=@1@'.format(preload_env_var, fake_dlclose.full_path())
   endif
-endif
 
+  add_env = {
+    'ASAN_OPTIONS': 'fast_unwind_on_malloc=0:detect_leaks=1',
+    'LSAN_OPTIONS': 'suppressions=@0@/lsan.supp'.format(meson.current_source_dir()),
+    'FAKE_DLCLOSE': fake_dlclose.full_path(),
+    'CHECKER': checker,
+  }
+
+  foreach name, value : add_env
+    conf_env.set(name, value)
+    test_env.set(name, value)
+  endforeach
+endif
 
 test_programs = {
   'tsession': ['tsession.c'],
@@ -128,29 +125,44 @@ foreach t, sources : test_programs
   test_executables += [t]
 endforeach
 
+setup_script=find_program('setup.sh')
+all_suites=['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']
+foreach suite : all_suites
+  test(
+    'setup',
+    setup_script,
+    args: suite,
+    suite: suite,
+    env: conf_env,
+    is_parallel: false,
+    depends: setup_deps,
+  )
+endforeach
+
 tests = {
-  'basic': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'pubkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'certs': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'ecc': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'basic': {'suites': all_suites},
+  'pubkey': {'suites': all_suites},
+  'certs': {'suites': all_suites},
+  'ecc': {'suites': all_suites},
   'edwards': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
   'ecdh': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
-  'democa': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'is_parallel': false},
-  'digest': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'fork': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'democa': {'suites': all_suites, 'is_parallel': false},
+  'digest': {'suites': all_suites},
+  'fork': {'suites': all_suites},
   'oaepsha2': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'hkdf': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'imported' : {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
-  'rsapss': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
+  'rsa': {'suites': all_suites},
+  'rsapss': {'suites': all_suites},
   'rsapssam': {'suites': ['softhsm', 'kryoptic']},
-  'genkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'pkey': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'session': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'rand': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'readkeys': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']},
-  'tls': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'is_parallel': false, 'timeout': 60},
-  'tlsfuzzer': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
-  'uri': {'suites': ['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
+  'genkey': {'suites': all_suites},
+  'pkey': {'suites': all_suites},
+  'session': {'suites': all_suites},
+  'rand': {'suites': all_suites},
+  'readkeys': {'suites': all_suites},
+  'tls': {'suites': all_suites, 'is_parallel': false, 'timeout': 60},
+  'tlsfuzzer': {'suites': all_suites, 'timeout': 90},
+  'uri': {'suites': all_suites, 'timeout': 90},
   'ecxc': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
   'cms': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'pinlock': {'suites': ['kryoptic']},

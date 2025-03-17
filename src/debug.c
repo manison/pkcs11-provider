@@ -7,7 +7,7 @@
 #include <string.h>
 
 int debug_level = -1;
-FILE *stddebug = NULL;
+static FILE *stddebug = NULL;
 
 /* this function relies on being called by P11PROV_debug, after
  * an __atomic_compare_exchange_n sets debug_lazy_init to -1,
@@ -69,6 +69,24 @@ void p11prov_debug(const char *file, int line, const char *func,
 {
     const char newline[] = "\n";
     va_list args;
+#ifdef WIN32
+    struct _timespec64 ts;
+#else
+    struct timespec ts;
+#endif
+    struct tm tm_info;
+    char timebuf[64];
+
+#ifdef WIN32
+    (void)_timespec64_get(&ts, TIME_UTC);
+    _localtime64_s(&tm_info, &ts.tv_sec);
+#else
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm_info);
+#endif
+    strftime(timebuf, sizeof(timebuf), "%Y-%m-%d %H:%M:%S", &tm_info);
+
+    fprintf(stddebug, "[%s.%03ld] ", timebuf, ts.tv_nsec / 1000000);
 
     if (file) {
         fprintf(stddebug, "[%s:%d] ", file, line);

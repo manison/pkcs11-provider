@@ -1,5 +1,5 @@
 #Enable gpg signature verification
-%bcond_with gpgcheck
+%bcond gpgcheck 1
 
 Name:          pkcs11-provider
 Version:       1.0
@@ -29,7 +29,6 @@ BuildRequires: openssl
 BuildRequires: softhsm
 BuildRequires: opensc
 BuildRequires: p11-kit-devel
-BuildRequires: gnutls-utils
 BuildRequires: xz
 BuildRequires: expect
 

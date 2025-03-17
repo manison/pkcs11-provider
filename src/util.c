@@ -34,10 +34,13 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
         unsigned long retrnums = 0;
         for (size_t i = 0; i < attrnums; i++) {
             if (q[i].ulValueLen == CK_UNAVAILABLE_INFORMATION) {
-                /* This can't happen according to the algorithm described
-                 * in the spec when the call returns CKR_OK. */
+                /* This means the attribute is valid, but not available for a
+                 * given object. Just skip it, unless it is required */
+                if (!attrs[i].required) {
+                    continue;
+                }
                 ret = CKR_GENERAL_ERROR;
-                P11PROV_raise(ctx, ret, "Failed to get attributes");
+                P11PROV_raise(ctx, ret, "Failed to get required attributes");
                 goto done;
             }
             if (attrs[i].allocate) {
@@ -80,9 +83,17 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                     if (attrs[i].required) {
                         return ret;
                     }
+                    /* Invalid attribute: No need to call the function again for
+                     * this attribute */
+                    continue;
                 } else {
-                    attrs[i].attr.pValue =
-                        OPENSSL_zalloc(attrs[i].attr.ulValueLen + 1);
+                    CK_ULONG len = attrs[i].attr.ulValueLen;
+                    if (len == CK_UNAVAILABLE_INFORMATION) {
+                        /* The attribute is known to the module, but not
+                         * available on this object */
+                        continue;
+                    }
+                    attrs[i].attr.pValue = OPENSSL_zalloc(len + 1);
                     if (!attrs[i].attr.pValue) {
                         ret = CKR_HOST_MEMORY;
                         P11PROV_raise(ctx, ret, "Failed to get attributes");
