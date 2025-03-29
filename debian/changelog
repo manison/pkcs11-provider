@@ -1,3 +1,13 @@
+pkcs11-provider (1.0-2) unstable; urgency=medium
+
+  * Add timeout multiplier for unit tests to fix FTBFS on slow
+    architectures (Closes: #1095848)
+  * Add workaround for blhc failing due to meson test not compiling with
+    verbosity
+  * d/control: bump Standards-Version to 4.7.2, no changes
+
+ -- Luca Boccassi <bluca@debian.org>  Sat, 29 Mar 2025 01:25:16 +0000
+
 pkcs11-provider (1.0-1) unstable; urgency=medium
 
   * Update upstream source from tag 'upstream/1.0'
