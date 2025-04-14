@@ -1,3 +1,9 @@
+pkcs11-provider (1.0-3) unstable; urgency=medium
+
+  * Disable unit tests at build time (Closes: #1102965)
+
+ -- Luca Boccassi <bluca@debian.org>  Mon, 14 Apr 2025 13:57:22 +0100
+
 pkcs11-provider (1.0-2) unstable; urgency=medium
 
   * Add timeout multiplier for unit tests to fix FTBFS on slow
