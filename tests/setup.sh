@@ -26,7 +26,7 @@ if [[ "$OPENSC_VERSION" -le "25" ]]; then
 fi
 
 # FIPS Mode
-if [[ "${OPENSSL_FORCE_FIPS_MODE}" = "1" || "$(cat /proc/sys/crypto/fips_enabled)" = "1" ]]; then
+if [[ "${PKCS11_PROVIDER_FORCE_FIPS_MODE}" = "1" || "$(cat /proc/sys/crypto/fips_enabled)" = "1" ]]; then
     # We can not use Edwards curves in FIPS mode
     SUPPORT_ED25519=0
     SUPPORT_ED448=0
@@ -44,7 +44,22 @@ if [[ "${OPENSSL_FORCE_FIPS_MODE}" = "1" || "$(cat /proc/sys/crypto/fips_enabled
     # We also need additional configuration in openssl.cnf to assume the token
     # is FIPS token
     TOKENOPTIONS="pkcs11-module-assume-fips = true"
+
+    # Force OpenSSL FIPS mode
+    export OPENSSL_FORCE_FIPS_MODE=1
+
+    # Force NSS softokn FIPS mode
+    export NSS_FIPS=1
+
+    # NSS softokn requires stronger PIN in FIPS mode
+    PINVALUE="fo0m4nchU"
+else
+    PINVALUE="12345678"
 fi
+
+# Check if openssl supports skey
+SUPPORT_SKEY=0
+openssl skeyutl -h >/dev/null 2>&1 && SUPPORT_SKEY=1
 
 # Temporary dir and Token data dir
 TMPPDIR="${TESTBLDDIR}/${TOKENTYPE}"
@@ -55,7 +70,6 @@ fi
 mkdir "${TMPPDIR}"
 mkdir "${TOKDIR}"
 
-PINVALUE="12345678"
 PINFILE="${TMPPDIR}/pinfile.txt"
 echo ${PINVALUE} > "${PINFILE}"
 export GNUTLS_PIN=$PINVALUE
@@ -160,15 +174,13 @@ ca_sign() {
 
     CERTSUBJ="/O=PKCS11 Provider/CN=$CN/"
     SIGNKEY="pkcs11:object=$CACRTN;token=$TOKENLABELURI;type=private"
-    CACRT="pkcs11:object=$CACRTN;token=$TOKENLABELURI;type=cert"
     CERTPUBKEY="pkcs11:object=$LABEL;token=$TOKENLABELURI;type=public"
 
     OPENSSL_CMD="x509
         -new -subj \"${CERTSUBJ}\" -days 365 -set_serial \"${SERIAL}\"
         -extensions v3_req -extfile \"${OPENSSL_CONF}\"
         -out \"${TMPPDIR}/${LABEL}.crt\" -outform DER
-        -force_pubkey \"${CERTPUBKEY}\" -CAkey \"${SIGNKEY}\"
-        -CA \"${CACRT}\""
+        -force_pubkey \"${CERTPUBKEY}\" -signkey \"${SIGNKEY}\""
 
     if [ "$SIGOPT" = "PSS" ]; then
         OPENSSL_CMD+=" -sigopt rsa_padding_mode:pss"
@@ -475,6 +487,7 @@ title LINE "Export test variables to ${TMPPDIR}/testvars"
 cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
 ${TOKENCONFIGVARS}
 export P11LIB="${P11LIB}"
+export TOKENTYPE="${TOKENTYPE}"
 export TOKENLABEL="${TOKENLABEL}"
 export PKCS11_PROVIDER_MODULE=${P11LIB}
 export PPDBGFILE=${TMPPDIR}/p11prov-debug.log
@@ -489,6 +502,7 @@ export SUPPORT_RSA_PKCS1_ENCRYPTION="${SUPPORT_RSA_PKCS1_ENCRYPTION}"
 export SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT="${SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT}"
 export SUPPORT_TLSFUZZER="${SUPPORT_TLSFUZZER}"
 export SUPPORT_ALLOWED_MECHANISMS="${SUPPORT_ALLOWED_MECHANISMS}"
+export SUPPORT_SKEY="${SUPPORT_SKEY}"
 
 export TESTPORT="${TESTPORT}"
 
@@ -607,6 +621,19 @@ cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
 #export PKCS11SPY="${P11LIB}"
 #export PKCS11_PROVIDER_MODULE=/usr/lib64/pkcs11-spy.so
 DBGSCRIPT
+
+if [ -n "${OPENSSL_FORCE_FIPS_MODE}" ]; then
+    cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
+export OPENSSL_FORCE_FIPS_MODE=1
+DBGSCRIPT
+fi
+
+if [ -n "${NSS_FIPS}" ]; then
+    cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
+export NSS_FIPS=1
+DBGSCRIPT
+fi
+
 gen_unsetvars
 
 title ENDSECTION
