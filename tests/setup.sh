@@ -381,17 +381,20 @@ else
           --id="$KEYID" --label="${ECXCRTN}" 2>&1
     ptool --write-object="${TESTSSRCDIR}/explicit_ec.pub.der" --type=pubkey \
           --id="$KEYID" --label="${ECXCRTN}" 2>&1
+    ca_sign $ECXCRTN "My ecplicit EC Cert" $KEYID
 
     ECXBASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
     ECXBASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
     ECXBASEURI="pkcs11:id=${URIKEYID}"
     ECXPUBURI="pkcs11:type=public;id=${URIKEYID}"
     ECXPRIURI="pkcs11:type=private;id=${URIKEYID}"
+    ECXCRTURI="pkcs11:type=cert;object=${ECXCRTN}"
 
     title LINE "EXPLICIT EC PKCS11 URIS"
     echo "${ECXBASEURI}"
     echo "${ECXPUBURI}"
     echo "${ECXPRIURI}"
+    echo "${ECXCRTURI}"
     echo ""
 fi
 
@@ -593,6 +596,7 @@ export ECXBASEURIWITHPINSOURCE="${ECXBASEURIWITHPINSOURCE}"
 export ECXBASEURI="${ECXBASEURI}"
 export ECXPUBURI="${ECXPUBURI}"
 export ECXPRIURI="${ECXPRIURI}"
+export ECXCRTURI="${ECXCRTURI}"
 DBGSCRIPT
 fi
 

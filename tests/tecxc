@@ -133,4 +133,25 @@ req -new -batch -key "${ECXPRIURI}" -out ${TMPPDIR}/ecdsa_csr.pem'
 ossl '
 req -in ${TMPPDIR}/ecdsa_csr.pem -verify -noout'
 
+MESSAGEFILE=${TMPPDIR}/cms-message.txt
+echo "CMS Test Message" > "${MESSAGEFILE}"
+
+title PARA "Encrypt CMS with explicit EC"
+ossl '
+cms -encrypt -in "${MESSAGEFILE}"
+             -out "${TMPPDIR}/cms-message.ecx.enc"
+             -aes-256-cbc
+             -recip ${ECXCRTURI}
+             -binary'
+
+title PARA "Decrypt CMS with explicit EC"
+ossl '
+cms -decrypt -in "${TMPPDIR}/cms-message.ecx.enc"
+             -out "${TMPPDIR}/cms-message.ecx.dec"
+             -inkey ${ECXPRIURI}
+             -recip ${ECXCRTURI}
+             -binary'
+
+cmp "${MESSAGEFILE}" "${TMPPDIR}/cms-message.ecx.dec"
+
 exit 0
