@@ -3,7 +3,7 @@ name: Build
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "test/**"]
   pull_request:
     branches: ["main"]
 
@@ -94,7 +94,7 @@ jobs:
           meson test --num-processes 1 -C builddir
 
       - uses: actions/upload-artifact@v4
-        if: failure()
+        #if: failure()
         with:
           name: Test logs ${{ matrix.name }}, ${{ matrix.compiler }}, ${{ matrix.token }}
           path: |
