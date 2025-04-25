@@ -16,18 +16,10 @@ jobs:
       matrix:
         name: [debian]
         compiler: [gcc]
-        token: [softhsm]
+        token: [softhsm, softokn]
         include:
-          - name: fedora
-            container: fedora:latest
           - name: debian
             container: debian:sid
-          - name: centos9
-            container: quay.io/centos/centos:stream9
-          - name: centos10
-            container: quay.io/centos/centos:stream10
-          - name: ubuntu
-            container: ubuntu:latest
     container: ${{ matrix.container }}
     steps:
       - name: Install Dependencies

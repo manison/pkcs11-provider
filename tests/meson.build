@@ -165,7 +165,7 @@ tests = {
   'tlsfuzzer': {'suites': all_suites, 'timeout': 90},
   'uri': {'suites': all_suites, 'timeout': 90},
   'ecxc': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
-  'cms': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'cms': {'suites': ['softhsm', 'softokn', 'kryoptic', 'kryoptic.nss']},
   'pinlock': {'suites': ['kryoptic']},
 }
 
