@@ -176,6 +176,7 @@ typedef pthread_rwlock_t p11prov_rwlock_t;
 #define p11prov_rwlock_rdunlock(l)  pthread_rwlock_unlock(l)
 #define p11prov_rwlock_wrlock(l)    pthread_rwlock_wrlock(l)
 #define p11prov_rwlock_wrunlock(l)  pthread_rwlock_unlock(l)
+#define p11prov_rwlock_trywrlock(l) pthread_rwlock_trywrlock(l)
 #endif
 
 #if __SANITIZE_ADDRESS__
