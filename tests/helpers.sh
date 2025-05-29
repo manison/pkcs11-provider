@@ -4,6 +4,9 @@
 
 : "${TESTBLDDIR=.}"
 
+OPENSSL=$(which openssl3 2>/dev/null || true)
+OPENSSL=${OPENSSL:-openssl}
+
 title()
 {
     case "$1" in
@@ -48,12 +51,19 @@ helper_emit=1
 ossl()
 {
     helper_output=""
-    echo "# r $1" >> "${TMPPDIR}/gdb-commands.txt"
-    echo "$CHECKER openssl $1"
-    # shellcheck disable=SC2086  # this is intentionally split by words
-    __out=$(eval $CHECKER openssl $1)
+    if [[ "${2}" = "$helper_emit" ]]; then
+        echo "# r $1" >> "${TMPPDIR}/gdb-commands.txt"
+        echo "$CHECKER $OPENSSL $1"
+        # shellcheck disable=SC2086  # this is intentionally split by words
+        __out=$(eval $CHECKER $OPENSSL $1)
+    else
+        echo "# r $1 $2" >> "${TMPPDIR}/gdb-commands.txt"
+        echo "$CHECKER $OPENSSL $1 $2"
+        # shellcheck disable=SC2086  # this is intentionally split by words
+        __out=$(eval $CHECKER $OPENSSL $1 $2)
+    fi
     __res=$?
-    if [ "${2:-0}" -eq "$helper_emit" ]; then
+    if [[ "${2}" = "$helper_emit" ]]; then
         # shellcheck disable=SC2034  # used externally by caller
         helper_output="$__out"
     else

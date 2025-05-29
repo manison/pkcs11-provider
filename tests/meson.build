@@ -114,6 +114,7 @@ test_programs = {
   'tpkey': ['tpkey.c', 'util.c'],
   'pincache': ['pincache.c'],
   'ccerts': ['ccerts.c', 'util.c'],
+  'tecx': ['tecx.c', 'util.c'],
 }
 
 test_executables = []
@@ -145,7 +146,7 @@ tests = {
   'certs': {'suites': all_suites},
   'ecc': {'suites': all_suites},
   'edwards': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
-  'ecdh': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'ecdh': {'suites': all_suites},
   'democa': {'suites': all_suites, 'is_parallel': false},
   'digest': {'suites': all_suites},
   'fork': {'suites': all_suites},
@@ -158,7 +159,7 @@ tests = {
   'genkey': {'suites': all_suites},
   'pkey': {'suites': all_suites},
   'session': {'suites': all_suites},
-  'skey': {'suites': ['kryoptic', 'kryoptic.nss']},
+  'skey': {'suites': all_suites},
   'rand': {'suites': all_suites},
   'readkeys': {'suites': all_suites},
   'tls': {'suites': all_suites, 'is_parallel': false, 'timeout': 60},

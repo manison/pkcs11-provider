@@ -15,6 +15,13 @@ pkeyutl -derive -inkey ${ECBASEURI}
                 -peerkey ${ECPEERPUBURI}
                 -out ${TMPPDIR}/secret.ecdh.bin'
 
+title PARA "Additional test with EC keys"
+$CHECKER "${TESTBLDDIR}/tecx" "${ECPRIURI}" "${ECPEERPUBURI}"
+
+if [[  "$TOKENTYPE" = "softhsm" ]]; then
+    title "ECDH forced on token deadlocks SoftHSM2 so we skip those tests"
+    exit 0
+fi
 
 # Now test by forcing all operations on the token
 title PARA "ECDH Exchange forcing PKCS11 Provider"

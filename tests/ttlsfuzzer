@@ -18,7 +18,7 @@ TMPFILE="${TMPPDIR}/tls-fuzzer.$$.tmp"
 PORT="$TESTPORT"
 PYTHON=$(which python3)
 
-OPENSSL_VERSION=$(openssl version | sed 's/^OpenSSL \([0-9]*\)\.\([0-9]*\).*$/\1 \2/')
+OPENSSL_VERSION=$($OPENSSL version | sed 's/^OpenSSL \([0-9]*\)\.\([0-9]*\).*$/\1 \2/')
 OPENSSL_VERSION_MAJOR=$(echo "$OPENSSL_VERSION" | cut -d ' ' -f 1)
 OPENSSL_VERSION_MINOR=$(echo "$OPENSSL_VERSION" | cut -d ' ' -f 2)
 
@@ -30,7 +30,7 @@ elif [[ $OPENSSL_VERSION_MAJOR -eq 3 ]] && [[ $OPENSSL_VERSION_MINOR -lt 5 ]]; t
     SIGALGS="ecdsa_secp256r1_sha256 ecdsa_secp384r1_sha384 ecdsa_secp521r1_sha512 ed25519 ed448 8+26 8+27 8+28 rsa_pss_pss_sha256 rsa_pss_pss_sha384 rsa_pss_pss_sha512 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 rsa_pkcs1_sha256 rsa_pkcs1_sha384 rsa_pkcs1_sha512 ecdsa_sha224 rsa_pkcs1_sha224"
 else
     # PQC algorithms added
-    SIGALGS="ecdsa_secp256r1_sha256 ecdsa_secp384r1_sha384 ecdsa_secp521r1_sha512 ed25519 ed448 8+26 8+27 8+28 rsa_pss_pss_sha256 rsa_pss_pss_sha384 rsa_pss_pss_sha512 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 rsa_pkcs1_sha256 rsa_pkcs1_sha384 rsa_pkcs1_sha512 ecdsa_sha224 rsa_pkcs1_sha224 9+4 9+5 9+6"
+    SIGALGS="9+5 9+6 9+4 ecdsa_secp256r1_sha256 ecdsa_secp384r1_sha384 ecdsa_secp521r1_sha512 ed25519 ed448 8+26 8+27 8+28 rsa_pss_pss_sha256 rsa_pss_pss_sha384 rsa_pss_pss_sha512 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 rsa_pkcs1_sha256 rsa_pkcs1_sha384 rsa_pkcs1_sha512"
 fi
 
 prepare_test() {
@@ -41,6 +41,7 @@ prepare_test() {
     sed -e "s|@PRIURI@|$KEY|g" -e "s|@CRTURI@|$CERT|g" \
         -e "s/@PORT@/$PORT/g" \
         -e "s/@PROPQ@/$PROPQ/g" \
+        -e "s|@OPENSSL@|$OPENSSL|g" \
         -e "s/@SIGALGS@/$SIGALGS/g" "${TESTSSRCDIR}/${TEMPLATE}" >>"${TMPFILE}"
 }
 
@@ -56,7 +57,7 @@ run_test() {
     pushd "${TESTSSRCDIR}/../tlsfuzzer"
     test -L ecdsa || ln -s ../python-ecdsa/src/ecdsa ecdsa
     test -L tlslite || ln -s ../tlslite-ng/tlslite tlslite 2>/dev/null
-    PYTHONPATH=. "${PYTHON}" tests/scripts_retention.py "${TMPFILE}" openssl 821
+    PYTHONPATH=. "${PYTHON}" tests/scripts_retention.py "${TMPFILE}" "${OPENSSL}" 821
     popd
 }
 

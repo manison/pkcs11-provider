@@ -18,6 +18,7 @@ SUPPORT_RSA_PKCS1_ENCRYPTION=1
 SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT=1
 SUPPORT_TLSFUZZER=1
 SUPPORT_ALLOWED_MECHANISMS=0
+SUPPORT_SYMMETRIC=1
 
 # Ed448 requires OpenSC 0.26.0
 OPENSC_VERSION=$(opensc-tool -i | grep OpenSC | sed -e "s/OpenSC 0\.\([0-9]*\).*/\1/")
@@ -59,7 +60,7 @@ fi
 
 # Check if openssl supports skey
 SUPPORT_SKEY=0
-openssl skeyutl -h >/dev/null 2>&1 && SUPPORT_SKEY=1
+$OPENSSL skeyutl -h >/dev/null 2>&1 && SUPPORT_SKEY=1
 
 # Temporary dir and Token data dir
 TMPPDIR="${TESTBLDDIR}/${TOKENTYPE}"
@@ -72,7 +73,6 @@ mkdir "${TOKDIR}"
 
 PINFILE="${TMPPDIR}/pinfile.txt"
 echo ${PINVALUE} > "${PINFILE}"
-export GNUTLS_PIN=$PINVALUE
 
 if [ "${TOKENTYPE}" == "softhsm" ]; then
     source "${TESTSSRCDIR}/softhsm-init.sh"
@@ -85,6 +85,18 @@ elif [ "${TOKENTYPE}" == "kryoptic.nss" ]; then
 else
     echo "Unknown token type: $1"
     exit 1
+fi
+
+if [[ "${PKCS11_PROVIDER_FORCE_FIPS_MODE}" = "1" ]]; then
+    # temporarily suppress symmetric tests in FIPS mode as no FIPS provider
+    # supports SKEYMGMT yet.
+    SUPPORT_SKEY=0
+    SUPPORT_SYMMETRIC=0
+fi
+if [[ "${SUPPORT_SKEY}" = "1" ]]; then
+    if [[ "${SUPPORT_SYMMETRIC}" = "0" ]]; then
+        TOKENOPTIONS="pkcs11-module-block-operations = cipher skeymgmt\n$TOKENOPTIONS"
+    fi
 fi
 
 #RANDOM data
@@ -378,9 +390,9 @@ else
     ECXCRTN="ecExplicitCert"
 
     ptool --write-object="${TESTSSRCDIR}/explicit_ec.key.der" --type=privkey \
-          --id="$KEYID" --label="${ECXCRTN}" 2>&1
+          --id="$KEYID" --label="${ECXCRTN}" --usage-sign --usage-derive 2>&1
     ptool --write-object="${TESTSSRCDIR}/explicit_ec.pub.der" --type=pubkey \
-          --id="$KEYID" --label="${ECXCRTN}" 2>&1
+          --id="$KEYID" --label="${ECXCRTN}" --usage-sign --usage-derive 2>&1
 
     ECXBASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
     ECXBASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
@@ -503,6 +515,7 @@ export SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT="${SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT}
 export SUPPORT_TLSFUZZER="${SUPPORT_TLSFUZZER}"
 export SUPPORT_ALLOWED_MECHANISMS="${SUPPORT_ALLOWED_MECHANISMS}"
 export SUPPORT_SKEY="${SUPPORT_SKEY}"
+export SUPPORT_SYMMETRIC="${SUPPORT_SYMMETRIC}"
 
 export TESTPORT="${TESTPORT}"
 

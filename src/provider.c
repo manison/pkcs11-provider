@@ -1288,7 +1288,9 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
 
 static const char *p11prov_block_ops_names[OSSL_OP__HIGHEST + 1] = {
     [OSSL_OP_DIGEST] = "digest",
+#if SKEY_SUPPORT == 1
     [OSSL_OP_CIPHER] = "cipher",
+#endif
     [OSSL_OP_MAC] = "mac",
     [OSSL_OP_KDF] = "kdf",
     [OSSL_OP_RAND] = "rand",
@@ -1301,7 +1303,6 @@ static const char *p11prov_block_ops_names[OSSL_OP__HIGHEST + 1] = {
     [OSSL_OP_DECODER] = "decoder",
     [OSSL_OP_STORE] = "store",
 #if SKEY_SUPPORT == 1
-    [OSSL_OP_CIPHER] = "cipher",
     [OSSL_OP_SKEYMGMT] = "skeymgmt",
 #endif
 };
