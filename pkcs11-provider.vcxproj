@@ -27,6 +27,7 @@
     <TargetName>pkcs11</TargetName>
     <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
     <OutDir>$(MSBuildThisFileDirectory)bin\$(Platform)\$(Configuration)\</OutDir>
+    <Version>1.0</Version>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -53,7 +54,8 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Label="Version">
-    <VersionDefinitions>PACKAGE_NAME=&quot;pkcs11-provider&quot;;PACKAGE_MAJOR=1;PACKAGE_MINOR=0</VersionDefinitions>
+    <BuildInfo Condition="'$(BuildInfo)'==''">Built for Windows</BuildInfo>
+    <VersionDefinitions>PACKAGE_NAME=&quot;pkcs11-provider&quot;;PACKAGE_MAJOR=1;PACKAGE_MINOR=0;P11PROV_VERSION=&quot;$(Version)&quot;;P11PROV_BUILDINFO=&quot;$(BuildInfo)&quot;</VersionDefinitions>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
