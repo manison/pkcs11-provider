@@ -20,6 +20,8 @@
     <ClCompile Include="src\random.c" />
     <ClCompile Include="src\decoder.c" />
     <ClCompile Include="src\pk11_uri.c" />
+    <ClCompile Include="src\cipher.c" />
+    <ClCompile Include="src\skeymgmt.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -53,6 +55,8 @@
     <ClInclude Include="src\random.h" />
     <ClInclude Include="src\decoder.h" />
     <ClInclude Include="src\pk11_uri.h" />
+    <ClInclude Include="src\cipher.h" />
+    <ClInclude Include="src\skeymgmt.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">

@@ -111,6 +111,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\asymmetric_cipher.c" />
+    <ClCompile Include="src\cipher.c" />
     <ClCompile Include="src\debug.c" />
     <ClCompile Include="src\decoder.c" />
     <ClCompile Include="src\digests.c" />
@@ -125,6 +126,7 @@
     <ClCompile Include="src\random.c" />
     <ClCompile Include="src\session.c" />
     <ClCompile Include="src\signature.c" />
+    <ClCompile Include="src\skeymgmt.c" />
     <ClCompile Include="src\slot.c" />
     <ClCompile Include="src\store.c" />
     <ClCompile Include="src\tls.c" />
@@ -132,6 +134,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
+    <ClInclude Include="src\cipher.h" />
     <ClInclude Include="src\debug.h" />
     <ClInclude Include="src\decoder.h" />
     <ClInclude Include="src\digests.h" />
@@ -151,6 +154,7 @@
     <ClInclude Include="src\random.h" />
     <ClInclude Include="src\session.h" />
     <ClInclude Include="src\signature.h" />
+    <ClInclude Include="src\skeymgmt.h" />
     <ClInclude Include="src\slot.h" />
     <ClInclude Include="src\store.h" />
     <ClInclude Include="src\util.h" />
