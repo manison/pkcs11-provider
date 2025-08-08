@@ -1,3 +1,9 @@
+pkcs11-provider (1.0-3~bpo12+1) bookworm-backports; urgency=medium
+
+  * Rebuild for bookworm-backports.
+
+ -- Luca Boccassi <bluca@debian.org>  Fri, 08 Aug 2025 18:23:37 +0100
+
 pkcs11-provider (1.0-3) unstable; urgency=medium
 
   * Disable unit tests at build time (Closes: #1102965)
