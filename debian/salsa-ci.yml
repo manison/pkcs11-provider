@@ -2,3 +2,11 @@
 include:
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/salsa-ci.yml
   - https://salsa.debian.org/salsa-ci-team/pipeline/raw/master/pipeline-jobs.yml
+
+variables:
+  RELEASE: 'bookworm-backports'
+  SALSA_CI_DISABLE_VERSION_BUMP: 'true'
+  SALSA_CI_DISABLE_PIUPARTS: 1
+  # Many false positives due to issue in binutils:
+  # https://bugs.debian.org/1000977
+  SALSA_CI_LINTIAN_SUPPRESS_TAGS: "elf-error,bad-distribution-in-changes-file,backports-changes-missing,newer-standards-version,aliased-location"
