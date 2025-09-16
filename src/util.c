@@ -34,10 +34,13 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
         unsigned long retrnums = 0;
         for (size_t i = 0; i < attrnums; i++) {
             if (q[i].ulValueLen == CK_UNAVAILABLE_INFORMATION) {
-                /* This can't happen according to the algorithm described
-                 * in the spec when the call returns CKR_OK. */
+                /* This means the attribute is valid, but not available for a
+                 * given object. Just skip it, unless it is required */
+                if (!attrs[i].required) {
+                    continue;
+                }
                 ret = CKR_GENERAL_ERROR;
-                P11PROV_raise(ctx, ret, "Failed to get attributes");
+                P11PROV_raise(ctx, ret, "Failed to get required attributes");
                 goto done;
             }
             if (attrs[i].allocate) {
@@ -80,9 +83,17 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                     if (attrs[i].required) {
                         return ret;
                     }
+                    /* Invalid attribute: No need to call the function again for
+                     * this attribute */
+                    continue;
                 } else {
-                    attrs[i].attr.pValue =
-                        OPENSSL_zalloc(attrs[i].attr.ulValueLen + 1);
+                    CK_ULONG len = attrs[i].attr.ulValueLen;
+                    if (len == CK_UNAVAILABLE_INFORMATION) {
+                        /* The attribute is known to the module, but not
+                         * available on this object */
+                        continue;
+                    }
+                    attrs[i].attr.pValue = OPENSSL_zalloc(len + 1);
                     if (!attrs[i].attr.pValue) {
                         ret = CKR_HOST_MEMORY;
                         P11PROV_raise(ctx, ret, "Failed to get attributes");
@@ -670,8 +681,9 @@ static char *uri_component(const char *name, const char *val, size_t vlen,
     return c;
 }
 
-char *p11prov_key_to_uri(P11PROV_CTX *ctx, P11PROV_OBJ *key)
+char *p11prov_obj_to_uri(P11PROV_OBJ *obj)
 {
+    P11PROV_CTX *ctx;
     P11PROV_SLOTS_CTX *slots;
     P11PROV_SLOT *slot;
     CK_TOKEN_INFO *token;
@@ -691,10 +703,11 @@ char *p11prov_key_to_uri(P11PROV_CTX *ctx, P11PROV_OBJ *key)
     size_t size_hint = 0;
     CK_RV ret;
 
-    class = p11prov_obj_get_class(key);
-    slot_id = p11prov_obj_get_slotid(key);
-    cka_id = p11prov_obj_get_attr(key, CKA_ID);
-    cka_label = p11prov_obj_get_attr(key, CKA_LABEL);
+    ctx = p11prov_obj_get_prov_ctx(obj);
+    class = p11prov_obj_get_class(obj);
+    slot_id = p11prov_obj_get_slotid(obj);
+    cka_id = p11prov_obj_get_attr(obj, CKA_ID);
+    cka_label = p11prov_obj_get_attr(obj, CKA_LABEL);
 
     switch (class) {
     case CKO_DATA:
@@ -1258,4 +1271,46 @@ done:
     EVP_MD_CTX_free(mdctx);
     EVP_MD_free(md);
     return rv;
+}
+
+static const CK_BBOOL val_true = CK_TRUE;
+static const CK_BBOOL val_false = CK_FALSE;
+
+void p11prov_set_attr_bool(CK_ATTRIBUTE *tmpl, CK_ATTRIBUTE_TYPE type, bool v)
+{
+    tmpl->type = type;
+    if (v) {
+        tmpl->pValue = (void *)&val_true;
+        tmpl->ulValueLen = sizeof(val_true);
+    } else {
+        tmpl->pValue = (void *)&val_false;
+        tmpl->ulValueLen = sizeof(val_false);
+    }
+}
+
+CK_RV p11prov_usage_to_template(CK_ATTRIBUTE *tmpl, size_t *size, size_t max,
+                                CK_FLAGS usage)
+{
+    static struct flag_to_attr {
+        CK_FLAGS flag;
+        CK_ATTRIBUTE_TYPE type;
+    } flag_to_attr[] = {
+        { CKF_ENCRYPT, CKA_ENCRYPT }, { CKF_DECRYPT, CKA_DECRYPT },
+        { CKF_SIGN, CKA_SIGN },       { CKF_VERIFY, CKA_VERIFY },
+        { CKF_WRAP, CKA_WRAP },       { CKF_UNWRAP, CKA_UNWRAP },
+        { CKF_DERIVE, CKA_DERIVE },   { 0, 0 },
+    };
+    size_t idx = *size;
+
+    for (int i = 0; flag_to_attr[i].flag != 0; i++) {
+        if (usage & flag_to_attr[i].flag) {
+            if (idx >= max) {
+                return CKR_HOST_MEMORY;
+            }
+            p11prov_set_attr_bool(&tmpl[idx++], flag_to_attr[i].type, true);
+        }
+    }
+
+    *size = idx;
+    return CKR_OK;
 }

@@ -4,6 +4,11 @@
 
 source "${TESTSSRCDIR}/helpers.sh"
 
+if [[ "$NSS_FIPS" = "1" ]] && [[ "$TOKENTYPE" = "softokn" ]]; then
+    title "ECDH tests are not supported in FIPS for softokn token -- skipping"
+    exit 77;
+fi
+
 title PARA "Test SSL_CTX creation"
 $CHECKER "${TESTBLDDIR}/tlsctx"
 
@@ -40,7 +45,7 @@ run_test() {
     CLNT_ARGS=$4
 
     export PKCS11_PROVIDER_DEBUG="file:${TMPPDIR}/p11prov-debug-tls-server.log"
-    expect -c "spawn $CHECKER openssl s_server $PROPQ -accept \"${PORT}\" -naccept 1 -key \"${KEY}\" -cert \"${CERT}\" $SRV_ARGS;
+    expect -c "spawn $CHECKER $OPENSSL s_server $PROPQ -accept \"${PORT}\" -naccept 1 -key \"${KEY}\" -cert \"${CERT}\" $SRV_ARGS;
         set timeout 10;
         expect {
             \"ACCEPT\" {};
@@ -78,7 +83,7 @@ run_test() {
     read -r < "${TMPPDIR}/s_server_ready"
 
     export PKCS11_PROVIDER_DEBUG="file:${TMPPDIR}/p11prov-debug-tls-client.log"
-    expect -c "spawn $CHECKER openssl s_client $PROPQ -connect \"localhost:${PORT}\" -CAfile \"${CACRT}\" $CLNT_ARGS;
+    expect -c "spawn $CHECKER $OPENSSL s_client $PROPQ -connect \"localhost:${PORT}\" -CAfile \"${CACRT}\" $CLNT_ARGS;
         set timeout 10;
         expect {
             \" TLS SUCCESSFUL \" {};
@@ -106,22 +111,12 @@ run_tests() {
     title PARA "Run sanity test with default values (RSA)"
     run_test "$PRIURI" "$CRTURI"
 
-    if [[ -n "$RSAPSSPRIURI" ]]; then
+    if [[ -n "$RSAPSSBASEURI" ]]; then
         title PARA "Run sanity test with default values (RSA-PSS)"
-        selfsign_cert "${RSAPSSPRIURI}" "${TMPPDIR}/rsapss-default.pem" \
-            "-sigopt rsa_padding_mode:pss"
+        run_test "$RSAPSSPRIURI" "$RSAPSSCRTURI"
 
-        run_test "$RSAPSSPRIURI" "${TMPPDIR}/rsapss-default.pem"
-    fi
-
-    if [[ -n "$RSAPSS2PRIURI" ]]; then
         title PARA "Run sanity test with RSA-PSS and SHA256"
-        selfsign_cert "${RSAPSS2PRIURI}" "${TMPPDIR}/rsapss-sha256.pem" \
-            "-sigopt rsa_padding_mode:pss" \
-            "-sigopt digest:sha256" \
-            "-sigopt rsa_pss_saltlen:-1"
-
-        run_test "$RSAPSS2PRIURI" "${TMPPDIR}/rsapss-sha256.pem"
+        run_test "$RSAPSS2PRIURI" "$RSAPSS2CRTURI"
     fi
 
     title PARA "Run sanity test with default values (ECDSA)"
@@ -135,6 +130,11 @@ run_tests() {
     if [[ -n "$ED2BASEURI" ]]; then
         title PARA "Run sanity test with default values (Ed448)"
         run_test "$ED2PRIURI" "$ED2CRTURI"
+    fi
+
+    if [[ -n "$MLDSABASEURI" ]]; then
+        title PARA "Run sanity test with default values (ML-DSA)"
+        run_test "$MLDSAPRIURI" "$MLDSACRTURI"
     fi
 
     title PARA "Run test with TLS 1.2"

@@ -4,85 +4,6 @@
 
 source "${TESTSSRCDIR}/helpers.sh"
 
-title PARA "Raw Sign check error"
-dd if=/dev/urandom of="${TMPPDIR}/64Brandom.bin" bs=64 count=1 >/dev/null 2>&1
-FAIL=0
-ossl '
-pkeyutl -sign -inkey "${BASEURI}"
-              -pkeyopt pad-mode:none
-              -in ${TMPPDIR}/64Brandom.bin
-              -out ${TMPPDIR}/raw-sig.bin' || FAIL=1
-if [ $FAIL -eq 0 ]; then
-    echo "Raw signature should not allow data != modulus size"
-    exit 1
-fi
-# unfortunately pkeyutl simply does not make it possible to sign anything
-# that is bigger than a hash, which means we'd need a very small RSA key
-# to really check a raw signature through pkeyutl
-
-title PARA "Sign and Verify with provided Hash and RSA"
-ossl 'dgst -sha256 -binary -out ${TMPPDIR}/sha256.bin ${SEEDFILE}'
-ossl '
-pkeyutl -sign -inkey "${PRIURI}"
-              -in ${TMPPDIR}/sha256.bin
-              -out ${TMPPDIR}/sha256-sig.bin'
-
-ossl '
-pkeyutl -verify -inkey "${PUBURI}"
-                -pubin
-                -in ${TMPPDIR}/sha256.bin
-                -sigfile ${TMPPDIR}/sha256-sig.bin'
-
-title PARA "Sign and Verify with provided Hash and RSA with DigestInfo struct"
-ossl 'dgst -sha256 -binary -out ${TMPPDIR}/sha256.bin ${SEEDFILE}'
-ossl '
-pkeyutl -sign -inkey "${PRIURI}" -pkeyopt digest:sha256
-              -in ${TMPPDIR}/sha256.bin
-              -out ${TMPPDIR}/sha256-sig.bin'
-
-ossl '
-pkeyutl -verify -inkey "${PUBURI}" -pkeyopt digest:sha256
-                -pubin
-                -in ${TMPPDIR}/sha256.bin
-                -sigfile ${TMPPDIR}/sha256-sig.bin'
-
-title PARA "DigestSign and DigestVerify with RSA"
-ossl '
-pkeyutl -sign -inkey "${BASEURI}"
-              -digest sha256
-              -in ${RAND64FILE}
-              -rawin
-              -out ${TMPPDIR}/sha256-dgstsig.bin'
-ossl '
-pkeyutl -verify -inkey "${BASEURI}" -pubin
-                -digest sha256
-                -in ${RAND64FILE}
-                -rawin
-                -sigfile ${TMPPDIR}/sha256-dgstsig.bin'
-ossl '
-pkeyutl -verify -inkey "${PUBURI}"
-                -pubin
-                -digest sha256
-                -in ${RAND64FILE}
-                -rawin
-                -sigfile ${TMPPDIR}/sha256-dgstsig.bin'
-
-if [[ "$SUPPORT_RSA_PKCS1_ENCRYPTION" = "1" ]]; then
-    SECRETFILE=${TMPPDIR}/rsasecret.txt
-    echo "Super Secret" > "${SECRETFILE}"
-
-    title LINE "RSA basic encrypt and decrypt"
-    ossl '
-    pkeyutl -encrypt -inkey "${PUBURI}" -pubin
-                     -in ${SECRETFILE}
-                     -out ${SECRETFILE}.enc'
-    ossl '
-    pkeyutl -decrypt -inkey "${PRIURI}"
-                     -in ${SECRETFILE}.enc
-                     -out ${SECRETFILE}.dec'
-    diff "${SECRETFILE}" "${SECRETFILE}.dec"
-fi
-
 title PARA "Test Disallow Public Export"
 ORIG_OPENSSL_CONF=${OPENSSL_CONF}
 sed "s/#pkcs11-module-allow-export/pkcs11-module-allow-export = 1/" "${OPENSSL_CONF}" > "${OPENSSL_CONF}.noexport"
@@ -139,7 +60,7 @@ ossl 'pkey -in $ECBASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ec.pub.uri
 [[ -n $ED2BASEURIWITHPINSOURCE ]] && ossl 'pkey -in $ED2BASEURIWITHPINSOURCE -pubin -pubout -out ${TMPPDIR}/ed2.pub.uripinsource.pem'
 
 title PARA "Test prompting without PIN in config files"
-output=$(expect -c "spawn -noecho $CHECKER openssl pkey -in \"${PRIURI}\" -text -noout;
+output=$(expect -c "spawn -noecho $CHECKER $OPENSSL pkey -in \"${PRIURI}\" -text -noout;
                    expect \"Enter pass phrase for PKCS#11 Token (Slot *:\";
                    send \"${PINVALUE}\r\";
                    expect \"Key ID:\";")
@@ -160,6 +81,21 @@ if [ $FAIL -ne 0 ]; then
     echo
     exit 1
 fi
+
+# regression test for https://github.com/latchset/pkcs11-provider/issues/547
+title PARA "Make sure we are not prompted for pin to read public RSA key"
+# shellcheck disable=SC2153 # PUBURI is assigned in testvars
+expect -c "spawn -noecho $CHECKER $OPENSSL pkey -in \"${PUBURI}\" -pubin -pubout -out -;
+    expect {
+        \"Enter PIN for PKCS#11 Token (Slot *:\" {
+            exit 1; }
+        timeout { exit 2; }
+        eof { exit 0; }
+    }" || {
+    echo "Unexpected pin prompt received!"
+    exit 1
+}
+
 
 OPENSSL_CONF=${ORIG_OPENSSL_CONF}
 
