@@ -9,7 +9,7 @@ This package requires the following:
 - a C compiler that supports at least C11 semantics
 - meson
 - pkg-config
-- p11-kit, p11-kit-server, p11-kit-devel, opensc and softhsm (for testing)
+- p11-kit, p11-kit-devel, opensc and softhsm (for testing)
 - Kryoptic softoken (for testing)
 
 ### Build
@@ -32,6 +32,10 @@ where `libcrypto.pc` or `openssl.pc` can be found.
 Otherwise, you can set `CFLAGS`/`LDFLAGS`:
 
 - `CFLAGS="-I$OPENSSL_DIR/include" LDFLAGS="-L$OPENSSL_DIR/lib64" meson setup builddir`
+
+A "build info" string (which can be seen via openssl list -providers -verbose) can be set
+by using the build_info option before compilation:
+- `meson configure -Dbuild_info="Build-Id: 123456789" builddir
 
 ### Installation
 

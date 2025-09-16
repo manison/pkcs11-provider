@@ -21,6 +21,7 @@ struct p11prov_key {
     CK_BBOOL always_auth;
     CK_ULONG bit_size;
     CK_ULONG size;
+    CK_ULONG param_set;
 };
 
 struct p11prov_crt {
@@ -41,6 +42,7 @@ struct p11prov_obj {
     CK_BBOOL cka_token;
 
     P11PROV_URI *refresh_uri;
+    char *public_uri;
 
     union {
         struct p11prov_key key;
@@ -110,8 +112,8 @@ void p11prov_obj_pool_free(P11PROV_OBJ_POOL *pool)
         }
         OPENSSL_free(pool->objects);
         (void)MUTEX_UNLOCK(pool);
-        /* ------------- LOCKED SECTION */ }
-    else {
+        /* ------------- LOCKED SECTION */
+    } else {
         P11PROV_debug("Failed to lock object pool, leaking it!");
         return;
     }
@@ -212,6 +214,11 @@ done:
     (void)MUTEX_UNLOCK(pool);
     /* ------------- LOCKED SECTION */
 
+    if (ret == CKR_OK) {
+        P11PROV_debug("Object added to pool (idx=%d, obj=%p)", obj->poolid,
+                      obj);
+    }
+
     return ret;
 }
 
@@ -219,6 +226,7 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
 {
     P11PROV_OBJ_POOL *pool;
     CK_RV ret;
+    const char *errstr = NULL;
 
     if (obj->slotid == CK_UNAVAILABLE_INFORMATION) {
         /* a mock object */
@@ -230,15 +238,21 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
         return;
     }
 
+    P11PROV_debug("Object to be removed from pool (idx=%d, obj=%p)",
+                  obj->poolid, obj);
+
     ret = MUTEX_LOCK(pool);
     if (ret != CKR_OK) {
         return;
     }
 
     /* LOCKED SECTION ------------- */
-    if (obj->poolid >= pool->size || pool->objects[obj->poolid] != obj) {
-        ret = CKR_GENERAL_ERROR;
-        P11PROV_raise(pool->provctx, ret, "Objects pool in inconsistent state");
+    if (obj->poolid >= pool->size) {
+        errstr = "small pool";
+        goto done;
+    }
+    if (pool->objects[obj->poolid] != obj) {
+        errstr = "obj already removed";
         goto done;
     }
 
@@ -252,6 +266,12 @@ static void obj_rm_from_pool(P11PROV_OBJ *obj)
 done:
     (void)MUTEX_UNLOCK(pool);
     /* ------------- LOCKED SECTION */
+
+    if (errstr != NULL) {
+        P11PROV_raise(pool->provctx, ret,
+                      "Objects pool in inconsistent state - %s (obj=%p)",
+                      errstr, obj);
+    }
 }
 
 static CK_RV p11prov_obj_store_public_key(P11PROV_OBJ *key);
@@ -454,6 +474,7 @@ void p11prov_obj_free(P11PROV_OBJ *obj)
     }
     OPENSSL_free(obj->attrs);
 
+    OPENSSL_free(obj->public_uri);
     p11prov_uri_free(obj->refresh_uri);
 
     p11prov_obj_free(obj->assoc_obj);
@@ -521,6 +542,29 @@ CK_ATTRIBUTE *p11prov_obj_get_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type)
     return NULL;
 }
 
+CK_RV p11prov_obj_add_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE *attr)
+{
+    CK_ATTRIBUTE *new_attrs;
+
+    if (obj == NULL || attr == NULL) {
+        return CKR_ARGUMENTS_BAD;
+    }
+
+    new_attrs =
+        OPENSSL_realloc(obj->attrs, sizeof(CK_ATTRIBUTE) * (obj->numattrs + 1));
+    if (new_attrs == NULL) {
+        P11PROV_raise(obj->ctx, CKR_HOST_MEMORY,
+                      "Failed to reallocate attributes for new attribute");
+        return CKR_HOST_MEMORY;
+    }
+    obj->attrs = new_attrs;
+
+    obj->attrs[obj->numattrs] = *attr;
+    obj->numattrs++;
+
+    return CKR_OK;
+}
+
 bool p11prov_obj_get_bool(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type, bool def)
 {
     CK_ATTRIBUTE *attr = NULL;
@@ -556,6 +600,8 @@ CK_KEY_TYPE p11prov_obj_get_key_type(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
+        case CKO_SECRET_KEY:
             return obj->data.key.type;
         }
     }
@@ -564,14 +610,48 @@ CK_KEY_TYPE p11prov_obj_get_key_type(P11PROV_OBJ *obj)
 
 bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj)
 {
-    CK_ATTRIBUTE *am = p11prov_obj_get_attr(obj, CKA_ALLOWED_MECHANISMS);
+    CK_BBOOL token_supports_allowed_mechs = CK_TRUE;
+    CK_ATTRIBUTE *am = NULL;
     CK_MECHANISM_TYPE *allowed;
+    P11PROV_OBJ *priv = NULL;
     int am_nmechs;
+    CK_RV ret;
 
-    if (am == NULL || am->ulValueLen == 0) {
-        /* no limitations or no support for allowed mechs
-         * TODO we can try also certificate restrictions */
+    /* If the token does not support this attribute, do not even try to figure
+     * out the subtype. */
+    ret = p11prov_token_sup_attr(obj->ctx, obj->slotid, GET_ATTR,
+                                 CKA_ALLOWED_MECHANISMS,
+                                 &token_supports_allowed_mechs);
+    if (ret != CKR_OK) {
+        P11PROV_raise(obj->ctx, ret, "Failed to probe quirk");
+    } else if (token_supports_allowed_mechs == CK_FALSE) {
         return false;
+    }
+
+    am = p11prov_obj_get_attr(obj, CKA_ALLOWED_MECHANISMS);
+    if (am == NULL || am->ulValueLen == 0) {
+        /* The ALLOWED_MECHANISMS should be on both of the keys. But more
+         * commonly they are available only on the private key. Check if we
+         * have a priv key associated to this pub key and if so, use that one.
+         * TODO we can try also certificate restrictions
+         */
+        if (obj->class == CKO_PRIVATE_KEY) {
+            /* no limitations */
+            return false;
+        }
+
+        /* Try to find private key */
+        priv = p11prov_obj_find_associated(obj, CKO_PRIVATE_KEY);
+        if (priv == NULL) {
+            return false;
+        }
+
+        am = p11prov_obj_get_attr(priv, CKA_ALLOWED_MECHANISMS);
+        if (am == NULL || am->ulValueLen == 0) {
+            /* no limitations */
+            p11prov_obj_free(priv);
+            return false;
+        }
     }
     allowed = (CK_MECHANISM_TYPE *)am->pValue;
     am_nmechs = am->ulValueLen / sizeof(CK_MECHANISM_TYPE);
@@ -586,10 +666,12 @@ bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj)
         if (!found) {
             /* this is not a RSA-PSS mechanism. We can not enforce any
              * limitations */
+            p11prov_obj_free(priv);
             return false;
         }
     }
     /* all allowed mechanisms fit into the list of RSA-PSS ones */
+    p11prov_obj_free(priv);
     return true;
 }
 
@@ -599,6 +681,8 @@ CK_ULONG p11prov_obj_get_key_bit_size(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
+        case CKO_SECRET_KEY:
             return obj->data.key.bit_size;
         }
     }
@@ -611,7 +695,22 @@ CK_ULONG p11prov_obj_get_key_size(P11PROV_OBJ *obj)
         switch (obj->class) {
         case CKO_PRIVATE_KEY:
         case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
+        case CKO_SECRET_KEY:
             return obj->data.key.size;
+        }
+    }
+    return CK_UNAVAILABLE_INFORMATION;
+}
+
+CK_ULONG p11prov_obj_get_key_param_set(P11PROV_OBJ *obj)
+{
+    if (obj) {
+        switch (obj->class) {
+        case CKO_PRIVATE_KEY:
+        case CKO_PUBLIC_KEY:
+        case CKO_DOMAIN_PARAMETERS:
+            return obj->data.key.param_set;
         }
     }
     return CK_UNAVAILABLE_INFORMATION;
@@ -623,7 +722,7 @@ void p11prov_obj_to_store_reference(P11PROV_OBJ *obj, void **reference,
     /* The store context keeps reference to this object so we will not free
      * it while the store context is alive. When the applications wants to
      * reference the object, it will get its own reference through
-     * p11prov_common_load(). After closing the store, the user should
+     * p11prov_obj_from_typed_reference(). After closing the store, the user should
      * not be able to use this reference anymore. */
     *reference = obj;
     *reference_sz = sizeof(P11PROV_OBJ);
@@ -666,6 +765,37 @@ void p11prov_obj_set_associated(P11PROV_OBJ *obj, P11PROV_OBJ *assoc)
     }
 
     obj->assoc_obj = p11prov_obj_ref_no_cache(assoc);
+}
+
+const char *p11prov_obj_get_public_uri(P11PROV_OBJ *obj)
+{
+    if (!obj->public_uri) {
+        obj->public_uri = p11prov_obj_to_uri(obj);
+    }
+    return obj->public_uri;
+}
+
+void *p11prov_obj_from_typed_reference(const void *reference,
+                                       size_t reference_sz,
+                                       CK_KEY_TYPE key_type)
+{
+    P11PROV_OBJ *key;
+
+    /* the contents of the reference is the address to our object */
+    key = p11prov_obj_from_reference(reference, reference_sz);
+    if (key) {
+        CK_KEY_TYPE type = CK_UNAVAILABLE_INFORMATION;
+
+        type = p11prov_obj_get_key_type(key);
+        if (type == key_type) {
+            /* add ref count */
+            key = p11prov_obj_ref_no_cache(key);
+        } else {
+            key = NULL;
+        }
+    }
+
+    return key;
 }
 
 /* CKA_ID
@@ -937,6 +1067,93 @@ static CK_RV fetch_ec_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     return ret;
 }
 
+/* See FIPS-204, 4. Parameter Sets */
+#define ML_DSA_44_SK_SIZE 2560
+#define ML_DSA_65_SK_SIZE 4032
+#define ML_DSA_87_SK_SIZE 4896
+#define ML_DSA_44_PK_SIZE 1312
+#define ML_DSA_65_PK_SIZE 1952
+#define ML_DSA_87_PK_SIZE 2592
+
+#define MLDSA_ATTRS_NUM (BASE_KEY_ATTRS_NUM + 1)
+static CK_RV fetch_mldsa_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
+                             CK_OBJECT_HANDLE object, P11PROV_OBJ *key)
+{
+    struct fetch_attrs attrs[MLDSA_ATTRS_NUM];
+    CK_ATTRIBUTE *value_attr;
+    int num;
+    CK_RV ret;
+
+    switch (key->data.key.param_set) {
+    case CKP_ML_DSA_44:
+    case CKP_ML_DSA_65:
+    case CKP_ML_DSA_87:
+        break;
+    default:
+        ret = CKR_KEY_INDIGESTIBLE;
+        P11PROV_raise(key->ctx, ret, "Unknown ML-DSA param set: %lu",
+                      key->data.key.param_set);
+        return ret;
+    }
+
+    key->attrs = OPENSSL_zalloc(MLDSA_ATTRS_NUM * sizeof(CK_ATTRIBUTE));
+    if (key->attrs == NULL) {
+        return CKR_HOST_MEMORY;
+    }
+
+    num = 0;
+    if (key->class == CKO_PUBLIC_KEY) {
+        FA_SET_BUF_ALLOC(attrs, num, CKA_VALUE, true);
+    }
+    FA_SET_BUF_ALLOC(attrs, num, CKA_ID, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_LABEL, false);
+    if (key->class == CKO_PRIVATE_KEY) {
+        FA_SET_BUF_ALLOC(attrs, num, CKA_ALWAYS_AUTHENTICATE, false);
+    }
+
+    ret = p11prov_fetch_attributes(ctx, session, object, attrs, num);
+    if (ret != CKR_OK) {
+        p11prov_fetch_attrs_free(attrs, num);
+        return ret;
+    }
+
+    key->numattrs = 0;
+    p11prov_move_alloc_attrs(attrs, num, key->attrs, &key->numattrs);
+
+    switch (key->data.key.param_set) {
+    case CKP_ML_DSA_44:
+        key->data.key.size = ML_DSA_44_PK_SIZE;
+        break;
+    case CKP_ML_DSA_65:
+        key->data.key.size = ML_DSA_65_PK_SIZE;
+        break;
+    case CKP_ML_DSA_87:
+        key->data.key.size = ML_DSA_87_PK_SIZE;
+        break;
+    default:
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    if (key->class == CKO_PUBLIC_KEY) {
+        value_attr = p11prov_obj_get_attr(key, CKA_VALUE);
+        if (!value_attr) {
+            P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
+                          "Missing public key value");
+            return CKR_KEY_INDIGESTIBLE;
+        }
+        if (value_attr->ulValueLen != key->data.key.size) {
+            P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
+                          "Unexpected public key length %lu (expected %lu)",
+                          value_attr->ulValueLen, key->data.key.size);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+    }
+
+    key->data.key.bit_size = key->data.key.size * 8;
+
+    return CKR_OK;
+}
+
 #define CERT_ATTRS_NUM 9
 static CK_RV fetch_certificate(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                                CK_OBJECT_HANDLE object, P11PROV_OBJ *crt)
@@ -976,12 +1193,62 @@ static CK_RV fetch_certificate(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     return CKR_OK;
 }
 
+static CK_RV fetch_secret_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
+                              CK_OBJECT_HANDLE object, P11PROV_OBJ *key)
+{
+    struct fetch_attrs attrs[BASE_KEY_ATTRS_NUM + 2];
+    int num;
+    CK_RV ret;
+    CK_ATTRIBUTE *size = NULL;
+
+    key->attrs =
+        OPENSSL_zalloc((BASE_KEY_ATTRS_NUM + 2) * sizeof(CK_ATTRIBUTE));
+    if (key->attrs == NULL) {
+        return CKR_HOST_MEMORY;
+    }
+
+    num = 0;
+    FA_SET_BUF_ALLOC(attrs, num, CKA_ID, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_LABEL, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_ALWAYS_AUTHENTICATE, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_SENSITIVE, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_EXTRACTABLE, false);
+    FA_SET_BUF_ALLOC(attrs, num, CKA_VALUE_LEN, false);
+
+    ret = p11prov_fetch_attributes(ctx, session, object, attrs, num);
+    if (ret != CKR_OK) {
+        P11PROV_debug("Failed to query key attributes (%lu)", ret);
+        p11prov_fetch_attrs_free(attrs, num);
+        return ret;
+    }
+
+    key->numattrs = 0;
+    p11prov_move_alloc_attrs(attrs, num, key->attrs, &key->numattrs);
+
+    size = p11prov_obj_get_attr(key, CKA_VALUE_LEN);
+    if (!size) { /* Not all tokens support this attribute, stop*/
+        P11PROV_debug("Failed to query key attribute CKA_VALUE_LEN");
+        return CKR_OK;
+    }
+
+    if (size->ulValueLen == sizeof(CK_ULONG)) {
+        key->data.key.size = *(CK_ULONG *)size->pValue;
+        key->data.key.bit_size = key->data.key.size * 8;
+    } else {
+        P11PROV_raise(key->ctx, CKR_GENERAL_ERROR,
+                      "Unsupported Key Size format");
+        return CKR_GENERAL_ERROR;
+    }
+
+    return CKR_OK;
+}
+
 /* TODO: may want to have a hashmap with cached objects */
 CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                               CK_OBJECT_HANDLE handle, P11PROV_OBJ **object)
 {
     P11PROV_OBJ *obj;
-    struct fetch_attrs attrs[4];
+    struct fetch_attrs attrs[5];
     int num;
     CK_BBOOL token_supports_allowed_mechs = CK_TRUE;
     CK_RV ret;
@@ -1006,6 +1273,8 @@ CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     FA_SET_VAR_VAL(attrs, num, CKA_KEY_TYPE, obj->data.key.type, false);
     FA_SET_VAR_VAL(attrs, num, CKA_COPYABLE, obj->cka_copyable, false);
     FA_SET_VAR_VAL(attrs, num, CKA_TOKEN, obj->cka_token, false);
+    FA_SET_VAR_VAL(attrs, num, CKA_PARAMETER_SET, obj->data.key.param_set,
+                   false);
 
     ret = p11prov_fetch_attributes(ctx, session, handle, attrs, num);
     if (ret != CKR_OK) {
@@ -1025,6 +1294,7 @@ CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
 
     case CKO_PUBLIC_KEY:
     case CKO_PRIVATE_KEY:
+    case CKO_SECRET_KEY:
         switch (obj->data.key.type) {
         case CKK_RSA:
             ret = fetch_rsa_key(ctx, session, handle, obj);
@@ -1041,6 +1311,33 @@ CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                 return ret;
             }
             break;
+        case CKK_ML_DSA:
+            ret = fetch_mldsa_key(ctx, session, handle, obj);
+            if (ret != CKR_OK) {
+                p11prov_obj_free(obj);
+                return ret;
+            }
+            break;
+        case CKK_GENERIC_SECRET:
+        case CKK_AES:
+        case CKK_SHA_1_HMAC:
+        case CKK_SHA256_HMAC:
+        case CKK_SHA384_HMAC:
+        case CKK_SHA512_HMAC:
+        case CKK_SHA224_HMAC:
+        case CKK_SHA512_224_HMAC:
+        case CKK_SHA512_256_HMAC:
+        case CKK_SHA3_224_HMAC:
+        case CKK_SHA3_256_HMAC:
+        case CKK_SHA3_384_HMAC:
+        case CKK_SHA3_512_HMAC:
+            ret = fetch_secret_key(ctx, session, handle, obj);
+            if (ret != CKR_OK) {
+                p11prov_obj_free(obj);
+                return ret;
+            }
+            break;
+
         default:
             /* unknown key type, we can't handle it */
             P11PROV_debug("Unsupported key type (%lu)", obj->data.key.type);
@@ -1111,6 +1408,7 @@ CK_RV p11prov_obj_find(P11PROV_CTX *provctx, P11PROV_SESSION *session,
     case CKO_CERTIFICATE:
     case CKO_PUBLIC_KEY:
     case CKO_PRIVATE_KEY:
+    case CKO_SECRET_KEY:
         CKATTR_ASSIGN(template[tsize], CKA_CLASS, &class, sizeof(class));
         tsize++;
         break;
@@ -1232,7 +1530,7 @@ P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
     slotid = p11prov_obj_get_slotid(obj);
 
     ret = p11prov_get_session(obj->ctx, &slotid, NULL, NULL,
-                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, true,
+                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, false,
                               false, &session);
     if (ret != CKR_OK) {
         goto done;
@@ -1295,7 +1593,7 @@ static void p11prov_obj_refresh(P11PROV_OBJ *obj)
 
     P11PROV_debug("Refresh object %p", obj);
 
-    if (obj->class == CKO_PRIVATE_KEY) {
+    if (obj->class == CKO_PRIVATE_KEY || obj->class == CKO_SECRET_KEY) {
         login = true;
     }
     login_behavior = p11prov_ctx_login_behavior(obj->ctx);
@@ -1373,11 +1671,14 @@ static void p11prov_obj_refresh(P11PROV_OBJ *obj)
         break;
     case CKO_PUBLIC_KEY:
     case CKO_PRIVATE_KEY:
+    case CKO_SECRET_KEY:
         obj->data.key = tmp->data.key;
         break;
     default:
         break;
     }
+    OPENSSL_free(obj->public_uri);
+    obj->public_uri = NULL;
     /* FIXME: How do we refresh attrs? What happens if a pointer
      * to an attr value was saved somewhere? Freeing ->attrs would
      * cause use-after-free issues */
@@ -1760,6 +2061,7 @@ static CK_RV get_public_attrs(P11PROV_OBJ *obj, CK_ATTRIBUTE *attrs, int num)
     /* we couldn't get all of them, start fallback logic */
     switch (obj->class) {
     case CKO_PUBLIC_KEY:
+    case CKO_SECRET_KEY:
         return get_all_attrs(obj, attrs, num);
     case CKO_PRIVATE_KEY:
         rv = get_all_attrs(obj, attrs, num);
@@ -1824,15 +2126,17 @@ static int p11prov_obj_export_public_rsa_key(P11PROV_OBJ *obj,
     byteswap_buf(attrs[1].pValue, attrs[1].pValue, attrs[1].ulValueLen);
     params[n++] = OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_E,
                                           attrs[1].pValue, attrs[1].ulValueLen);
-    /* If this is an RSA-PSS limited key, OpenSSL need some more signs here.
+    /* TODO: Add RSA-PSS restrictions if there is only one allowed mechanisms.
      * The PKCS#11 specification is not compatible with what OpenSSL expects
      * (unless we would have just one mechanisms specified in
-     * ALLOWED_MECHANISMS) */
+     * ALLOWED_MECHANISMS) so its better to not add any restrictions now. */
+#if 0
     if (p11prov_obj_is_rsa_pss(obj)) {
         params[n++] = OSSL_PARAM_construct_utf8_string(
             OSSL_PKEY_PARAM_RSA_MASKGENFUNC, (char *)SN_mgf1, strlen(SN_mgf1));
-        /* TODO add the other params if restricted? */
+        /* TODO other restrictions */
     }
+#endif
     params[n++] = OSSL_PARAM_construct_end();
 
     ret = cb_fn(params, cb_arg);
@@ -2128,6 +2432,40 @@ done:
     return ret;
 }
 
+#define MLDSA_PUB_ATTRS 1
+static int p11prov_obj_export_public_mldsa_key(P11PROV_OBJ *obj,
+                                               OSSL_CALLBACK *cb_fn,
+                                               void *cb_arg)
+{
+    CK_ATTRIBUTE attrs[MLDSA_PUB_ATTRS] = { { 0 } };
+    OSSL_PARAM params[MLDSA_PUB_ATTRS + 1];
+    CK_RV rv;
+    int ret, n = 0;
+
+    if (p11prov_obj_get_key_type(obj) != CKK_ML_DSA) {
+        return RET_OSSL_ERR;
+    }
+
+    attrs[0].type = CKA_VALUE;
+
+    rv = get_public_attrs(obj, attrs, MLDSA_PUB_ATTRS);
+    if (rv != CKR_OK) {
+        P11PROV_raise(obj->ctx, rv, "Failed to get public key attributes");
+        return RET_OSSL_ERR;
+    }
+
+    params[n++] = OSSL_PARAM_construct_octet_string(
+        OSSL_PKEY_PARAM_PUB_KEY, attrs[0].pValue, attrs[0].ulValueLen);
+    params[n++] = OSSL_PARAM_construct_end();
+
+    ret = cb_fn(params, cb_arg);
+
+    for (int i = 0; i < MLDSA_PUB_ATTRS; i++) {
+        OPENSSL_free(attrs[i].pValue);
+    }
+    return ret;
+}
+
 int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
                                   bool search_related, bool params_only,
                                   OSSL_CALLBACK *cb_fn, void *cb_arg)
@@ -2160,6 +2498,8 @@ int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
     case CKK_EC_EDWARDS:
         return p11prov_obj_export_public_ec_key(obj, params_only, cb_fn,
                                                 cb_arg);
+    case CKK_ML_DSA:
+        return p11prov_obj_export_public_mldsa_key(obj, cb_fn, cb_arg);
     default:
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR, "Unsupported key type");
         return RET_OSSL_ERR;
@@ -2433,6 +2773,39 @@ CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key)
     return pub_key;
 }
 
+static int cmp_bn_attr(P11PROV_OBJ *key1, P11PROV_OBJ *key2,
+                       CK_ATTRIBUTE_TYPE attr)
+{
+    BIGNUM *bx1;
+    BIGNUM *bx2;
+    CK_ATTRIBUTE *x1, *x2;
+    int rc = RET_OSSL_ERR;
+
+    /* is BN ?*/
+    if (attr != CKA_MODULUS && attr != CKA_PUBLIC_EXPONENT) {
+        return rc;
+    }
+
+    x1 = p11prov_obj_get_attr(key1, attr);
+    x2 = p11prov_obj_get_attr(key2, attr);
+
+    if (!x1 || !x2) {
+        return rc;
+    }
+
+    bx1 = BN_native2bn(x1->pValue, x1->ulValueLen, NULL);
+    bx2 = BN_native2bn(x2->pValue, x2->ulValueLen, NULL);
+
+    if (BN_cmp(bx1, bx2) == 0) {
+        rc = RET_OSSL_OK;
+    }
+
+    BN_free(bx1);
+    BN_free(bx2);
+
+    return rc;
+}
+
 static int cmp_attr(P11PROV_OBJ *key1, P11PROV_OBJ *key2,
                     CK_ATTRIBUTE_TYPE attr)
 {
@@ -2461,15 +2834,18 @@ static int cmp_public_key_values(P11PROV_OBJ *pub_key1, P11PROV_OBJ *pub_key2)
         /* pub_key1 pub_key2 could be CKO_PRIVATE_KEY here but
          *  nevertheless contain these two attributes
          */
-        ret = cmp_attr(pub_key1, pub_key2, CKA_MODULUS);
+        ret = cmp_bn_attr(pub_key1, pub_key2, CKA_MODULUS);
         if (ret == RET_OSSL_ERR) {
             break;
         }
-        ret = cmp_attr(pub_key1, pub_key2, CKA_PUBLIC_EXPONENT);
+        ret = cmp_bn_attr(pub_key1, pub_key2, CKA_PUBLIC_EXPONENT);
         break;
     case CKK_EC:
     case CKK_EC_EDWARDS:
         ret = cmp_attr(pub_key1, pub_key2, CKA_P11PROV_PUB_KEY);
+        break;
+    case CKK_ML_DSA:
+        ret = cmp_attr(pub_key1, pub_key2, CKA_VALUE);
         break;
     default:
         ret = RET_OSSL_ERR;
@@ -2800,6 +3176,23 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
         }
         break;
 
+    case CKK_ML_DSA:
+        /* The parameter set maps to the specific key bit length that was
+         * compared already. If the bit size matches, the param set matches. */
+        if (cmp_type & OBJ_CMP_KEY_PRIVATE) {
+            /* unfortunately we can't really read private attributes
+             * and there is no comparison function int he PKCS11 API.
+             * Generally you do not have 2 identical keys stored in to two
+             * separate objects so the initial shortcircuit that matches if
+             * slotid/handle are identical will often cover this. When that
+             * fails we have no option but to fail for now. */
+            P11PROV_debug("We can't really match private keys");
+            /* OTOH if param set and pub value match either this is a broken key
+             * or the private key must also match */
+            cmp_type = OBJ_CMP_KEY_PUBLIC;
+        }
+        break;
+
     default:
         return RET_OSSL_ERR;
     }
@@ -2840,6 +3233,7 @@ struct pool_find_ctx {
     CK_OBJECT_CLASS class;
     CK_ULONG key_size;
     CK_ULONG bit_size;
+    CK_ULONG param_set;
     CK_ATTRIBUTE attrs[MAX_ATTRS_SIZE];
     int numattrs;
     P11PROV_OBJ *found;
@@ -2870,6 +3264,10 @@ static bool pool_find_callback(void *pctx, P11PROV_OBJ_POOL *pool)
             continue;
         }
         if (obj->data.key.type != ctx->type) {
+            continue;
+        }
+        if (ctx->param_set != CK_UNAVAILABLE_INFORMATION
+            && obj->data.key.param_set != ctx->param_set) {
             continue;
         }
         if (obj->data.key.bit_size != ctx->bit_size) {
@@ -3339,9 +3737,106 @@ done:
     return rv;
 }
 
+static CK_RV prep_mldsa_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
+                             struct pool_find_ctx *findctx)
+{
+    data_buffer digest_data[4];
+    data_buffer digest = { 0 };
+    const OSSL_PARAM *p;
+    CK_RV rv;
+    int i;
+
+    if (findctx->numattrs != MAX_ATTRS_SIZE) {
+        return CKR_ARGUMENTS_BAD;
+    }
+    findctx->numattrs = 0;
+
+    switch (findctx->param_set) {
+    case CKP_ML_DSA_44:
+        findctx->key_size = ML_DSA_44_PK_SIZE;
+        break;
+    case CKP_ML_DSA_65:
+        findctx->key_size = ML_DSA_65_PK_SIZE;
+        break;
+    case CKP_ML_DSA_87:
+        findctx->key_size = ML_DSA_87_PK_SIZE;
+        break;
+    default:
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    switch (findctx->class) {
+    case CKO_PUBLIC_KEY:
+        rv = param_to_attr(ctx, params, OSSL_PKEY_PARAM_PUB_KEY,
+                           &findctx->attrs[0], CKA_VALUE, false);
+        if (rv != CKR_OK) {
+            return rv;
+        }
+        findctx->numattrs++;
+        if (findctx->key_size != findctx->attrs[0].ulValueLen) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE,
+                          "Unexpected public key size %lu (expected %lu)",
+                          findctx->attrs[0].ulValueLen, findctx->key_size);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+        break;
+    case CKO_PRIVATE_KEY:
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                          OSSL_PKEY_PARAM_PRIV_KEY);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+
+        i = 0;
+        /* prefix */
+        digest_data[i].data = (uint8_t *)"PrivKey";
+        digest_data[i].length = 7;
+        i++;
+
+        digest_data[i].data = p->data;
+        digest_data[i].length = p->data_size;
+        i++;
+
+        digest_data[i].data = NULL;
+
+        rv = p11prov_digest_util(ctx, "sha256", NULL, digest_data, &digest);
+        if (rv != CKR_OK) {
+            return rv;
+        }
+        findctx->attrs[0].type = CKA_ID;
+        findctx->attrs[0].pValue = digest.data;
+        findctx->attrs[0].ulValueLen = digest.length;
+        findctx->numattrs++;
+        break;
+    default:
+        return CKR_GENERAL_ERROR;
+    }
+
+    /* common params */
+    findctx->attrs[findctx->numattrs].type = CKA_PARAMETER_SET;
+    findctx->attrs[findctx->numattrs].pValue =
+        OPENSSL_malloc(sizeof(findctx->param_set));
+    if (!findctx->attrs[findctx->numattrs].pValue) {
+        return CKR_HOST_MEMORY;
+    }
+    memcpy(findctx->attrs[findctx->numattrs].pValue, &findctx->param_set,
+           sizeof(findctx->param_set));
+    findctx->attrs[findctx->numattrs].ulValueLen = sizeof(findctx->param_set);
+    findctx->numattrs++;
+
+    findctx->bit_size = findctx->key_size * 8;
+
+    return CKR_OK;
+}
+
 static CK_RV return_dup_key(P11PROV_OBJ *dst, P11PROV_OBJ *src)
 {
     CK_RV rv;
+
+    P11PROV_debug("duplicating obj key (dst=%p, src=%p, handle=%lu, "
+                  "slotid=%lu, raf=%d, numattrs=%d)",
+                  dst, src, src->handle, src->slotid, src->raf, src->numattrs);
 
     dst->slotid = src->slotid;
     dst->handle = src->handle;
@@ -3411,6 +3906,8 @@ static CK_RV fix_ec_key_import(P11PROV_OBJ *key, int allocattrs)
     key->attrs[key->numattrs].ulValueLen = len;
     key->numattrs++;
 
+    P11PROV_debug("fixing EC key %p import", key);
+
     return CKR_OK;
 }
 
@@ -3422,6 +3919,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         .type = type,
         .class = CKO_PUBLIC_KEY,
         .bit_size = 0,
+        .param_set = CK_UNAVAILABLE_INFORMATION,
         .attrs = { { 0 } },
         .numattrs = MAX_ATTRS_SIZE,
         .found = NULL,
@@ -3436,6 +3934,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
 
     switch (type) {
     case CKK_RSA:
+        P11PROV_debug("obj import of RSA public key %p", key);
         rv = prep_rsa_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
@@ -3444,6 +3943,7 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC:
+        P11PROV_debug("obj import of EC public key %p", key);
         rv = prep_ec_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
@@ -3452,11 +3952,21 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         break;
 
     case CKK_EC_EDWARDS:
+        P11PROV_debug("obj import of ED public key %p", key);
         rv = prep_ed_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
         }
         allocattrs = EC_ATTRS_NUM;
+        break;
+    case CKK_ML_DSA:
+        P11PROV_debug("obj import of ML-DSA public key %p", key);
+        findctx.param_set = key->data.key.param_set;
+        rv = prep_mldsa_find(ctx, params, &findctx);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        allocattrs = MLDSA_ATTRS_NUM;
         break;
 
     default:
@@ -3497,12 +4007,14 @@ static CK_RV p11prov_obj_import_public_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
      * the key can be imported on the fly in the correct slot at the time the
      * operation needs to be performed.
      */
+    P11PROV_debug("public key %p not found in the pool - using mock", key);
 
     /* move data */
     key->class = findctx.class;
     key->data.key.type = findctx.type;
     key->data.key.size = findctx.key_size;
     key->data.key.bit_size = findctx.bit_size;
+    key->data.key.param_set = findctx.param_set;
     key->attrs = OPENSSL_malloc(sizeof(CK_ATTRIBUTE) * allocattrs);
     if (!key->attrs) {
         P11PROV_raise(key->ctx, CKR_HOST_MEMORY, "Failed allocation");
@@ -3666,6 +4178,72 @@ done:
     return rv;
 }
 
+static CK_RV p11prov_store_mldsa_public_key(P11PROV_OBJ *key)
+{
+    CK_BBOOL val_true = CK_TRUE;
+    CK_BBOOL val_false = CK_FALSE;
+    CK_ATTRIBUTE template[] = {
+        { CKA_CLASS, &key->class, sizeof(CK_OBJECT_CLASS) },
+        { CKA_KEY_TYPE, &key->data.key.type, sizeof(CK_KEY_TYPE) },
+        { CKA_VERIFY, &val_true, sizeof(val_true) },
+        /* public key part */
+        { CKA_PARAMETER_SET, NULL, 0 },
+        { CKA_VALUE, NULL, 0 },
+        { CKA_TOKEN, &val_false, sizeof(val_false) },
+    };
+    int na = sizeof(template) / sizeof(CK_ATTRIBUTE);
+    CK_ATTRIBUTE *a;
+    P11PROV_SLOTS_CTX *slots = NULL;
+    CK_SLOT_ID slot = CK_UNAVAILABLE_INFORMATION;
+    P11PROV_SESSION *session = NULL;
+    CK_RV rv = CKR_GENERAL_ERROR;
+
+    a = p11prov_obj_get_attr(key, CKA_PARAMETER_SET);
+    if (!a) {
+        return CKR_GENERAL_ERROR;
+    }
+    template[3].pValue = a->pValue;
+    template[3].ulValueLen = a->ulValueLen;
+
+    a = p11prov_obj_get_attr(key, CKA_VALUE);
+    if (!a) {
+        return CKR_GENERAL_ERROR;
+    }
+    template[4].pValue = a->pValue;
+    template[4].ulValueLen = a->ulValueLen;
+
+    slots = p11prov_ctx_get_slots(key->ctx);
+    if (!slots) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    slot = p11prov_get_default_slot(slots);
+    if (slot == CK_UNAVAILABLE_INFORMATION) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    rv = p11prov_take_login_session(key->ctx, slot, &session);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    rv = p11prov_CreateObject(key->ctx, p11prov_session_handle(session),
+                              template, na, &key->handle);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    key->slotid = slot;
+
+    rv = CKR_OK;
+
+done:
+    p11prov_return_session(session);
+    return rv;
+}
+
 static CK_RV p11prov_obj_store_public_key(P11PROV_OBJ *key)
 {
     int rv;
@@ -3684,6 +4262,9 @@ static CK_RV p11prov_obj_store_public_key(P11PROV_OBJ *key)
     case CKK_EC:
     case CKK_EC_EDWARDS:
         rv = p11prov_store_ec_public_key(key);
+        break;
+    case CKK_ML_DSA:
+        rv = p11prov_store_mldsa_public_key(key);
         break;
 
     default:
@@ -3971,6 +4552,103 @@ done:
     return rv;
 }
 
+#ifndef OSSL_PKEY_PARAM_ML_DSA_SEED
+#define OSSL_PKEY_PARAM_ML_DSA_SEED "seed"
+#endif
+
+static CK_RV p11prov_store_mldsa_private_key(P11PROV_OBJ *key,
+                                             struct pool_find_ctx *findctx,
+                                             const OSSL_PARAM params[])
+{
+    CK_BBOOL val_true = CK_TRUE;
+    CK_BBOOL val_false = CK_FALSE;
+    const OSSL_PARAM *p;
+    CK_ATTRIBUTE template[] = {
+        { CKA_CLASS, &findctx->class, sizeof(CK_OBJECT_CLASS) },
+        { CKA_KEY_TYPE, &findctx->type, sizeof(CK_KEY_TYPE) },
+        { CKA_ID, findctx->attrs[0].pValue, findctx->attrs[0].ulValueLen },
+        { CKA_PARAMETER_SET, findctx->attrs[1].pValue,
+          findctx->attrs[1].ulValueLen },
+        { CKA_SENSITIVE, &val_true, sizeof(val_true) },
+        { CKA_EXTRACTABLE, &val_false, sizeof(val_false) },
+        { CKA_TOKEN, &val_false, sizeof(val_false) },
+        { CKA_SIGN, &val_true, sizeof(val_true) },
+        /* private key part */
+        { CKA_VALUE, NULL, 0 },
+        { CKA_SEED, NULL, 0 },
+    };
+    int na = (sizeof(template) / sizeof(CK_ATTRIBUTE)) - 2;
+    P11PROV_SLOTS_CTX *slots = NULL;
+    CK_SLOT_ID slot = CK_UNAVAILABLE_INFORMATION;
+    P11PROV_SESSION *session = NULL;
+    CK_RV rv = CKR_GENERAL_ERROR;
+
+    p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+    if (!p) {
+        return CKR_KEY_INDIGESTIBLE;
+    }
+    template[na].pValue = p->data;
+    template[na].ulValueLen = p->data_size;
+    na++;
+
+    p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_ML_DSA_SEED);
+    if (p) {
+        template[na].pValue = p->data;
+        template[na].ulValueLen = p->data_size;
+        na++;
+    }
+
+    slots = p11prov_ctx_get_slots(key->ctx);
+    if (!slots) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    slot = p11prov_get_default_slot(slots);
+    if (slot == CK_UNAVAILABLE_INFORMATION) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    rv = p11prov_take_login_session(key->ctx, slot, &session);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    rv = p11prov_CreateObject(key->ctx, p11prov_session_handle(session),
+                              template, na, &key->handle);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    key->slotid = slot;
+    key->class = findctx->class;
+    key->data.key.type = findctx->type;
+    key->data.key.size = findctx->key_size;
+    key->data.key.bit_size = findctx->bit_size;
+    key->data.key.param_set = findctx->param_set;
+    key->attrs = OPENSSL_zalloc(sizeof(CK_ATTRIBUTE) * findctx->numattrs);
+    if (!key->attrs) {
+        rv = CKR_HOST_MEMORY;
+        goto done;
+    }
+    key->numattrs = 0;
+    for (int i = 0; i < findctx->numattrs; i++) {
+        rv = p11prov_copy_attr(&key->attrs[i], &findctx->attrs[i]);
+        if (rv != CKR_OK) {
+            rv = CKR_HOST_MEMORY;
+            P11PROV_raise(key->ctx, rv, "Failed attr copy");
+            goto done;
+        }
+        key->numattrs++;
+    }
+    rv = CKR_OK;
+
+done:
+    p11prov_return_session(session);
+    return rv;
+}
+
 static CK_RV p11prov_obj_import_private_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
                                             const OSSL_PARAM params[])
 {
@@ -3978,6 +4656,7 @@ static CK_RV p11prov_obj_import_private_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
     struct pool_find_ctx findctx = {
         .type = type,
         .class = CKO_PRIVATE_KEY,
+        .param_set = CK_UNAVAILABLE_INFORMATION,
         .attrs = { { 0 } },
         .numattrs = MAX_ATTRS_SIZE,
         .found = NULL,
@@ -4006,6 +4685,13 @@ static CK_RV p11prov_obj_import_private_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
 
     case CKK_EC_EDWARDS:
         rv = prep_ed_find(ctx, params, &findctx);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        break;
+    case CKK_ML_DSA:
+        findctx.param_set = key->data.key.param_set;
+        rv = prep_mldsa_find(ctx, params, &findctx);
         if (rv != CKR_OK) {
             goto done;
         }
@@ -4054,6 +4740,9 @@ static CK_RV p11prov_obj_import_private_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
     case CKK_EC_EDWARDS:
         rv = p11prov_store_ec_private_key(key, &findctx, params);
         break;
+    case CKK_ML_DSA:
+        rv = p11prov_store_mldsa_private_key(key, &findctx, params);
+        break;
 
     default:
         P11PROV_raise(key->ctx, CKR_GENERAL_ERROR,
@@ -4096,7 +4785,7 @@ static CK_RV import_ec_params(P11PROV_OBJ *key, const OSSL_PARAM params[])
     }
 
     curve_nid = EC_GROUP_get_curve_name(group);
-    if (curve_nid == NID_undef) {
+    if (curve_nid != NID_undef) {
         curve_name = OSSL_EC_curve_nid2name(curve_nid);
         if (!curve_name) {
             P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
@@ -4215,7 +4904,9 @@ static CK_RV p11prov_obj_set_domain_params(P11PROV_OBJ *key, CK_KEY_TYPE type,
 }
 
 CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
-                             CK_OBJECT_CLASS class, const OSSL_PARAM params[])
+                             CK_OBJECT_CLASS class,
+                             CK_ML_DSA_PARAMETER_SET_TYPE param_set,
+                             const OSSL_PARAM params[])
 {
     /* This operation available only on new objects, can't import over an
      * existing one */
@@ -4224,12 +4915,19 @@ CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         return CKR_ARGUMENTS_BAD;
     }
 
+    if (type == CKK_ML_DSA) {
+        key->data.key.param_set = param_set;
+    }
+
     switch (class) {
     case CKO_PUBLIC_KEY:
+        key->class = CKO_PUBLIC_KEY;
         return p11prov_obj_import_public_key(key, type, params);
     case CKO_PRIVATE_KEY:
+        key->class = CKO_PRIVATE_KEY;
         return p11prov_obj_import_private_key(key, type, params);
     case CKO_DOMAIN_PARAMETERS:
+        key->class = CKO_DOMAIN_PARAMETERS;
         return p11prov_obj_set_domain_params(key, type, params);
     default:
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
@@ -4237,6 +4935,220 @@ CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
         return CKR_KEY_INDIGESTIBLE;
     }
 }
+
+#if SKEY_SUPPORT
+
+static CK_RV p11prov_store_aes_key(P11PROV_CTX *provctx, P11PROV_OBJ **ret,
+                                   const unsigned char *secret,
+                                   size_t secretlen, char *label,
+                                   CK_FLAGS usage, bool session_key)
+{
+    CK_OBJECT_CLASS key_class = CKO_SECRET_KEY;
+    CK_KEY_TYPE key_type = CKK_AES;
+    CK_SLOT_ID slot = CK_UNAVAILABLE_INFORMATION;
+    P11PROV_SLOTS_CTX *slots = NULL;
+    P11PROV_SESSION *session = NULL;
+    CK_OBJECT_HANDLE key_handle;
+    CK_BBOOL tokenobj = false;
+    P11PROV_OBJ *obj;
+    CK_RV rv;
+    CK_ATTRIBUTE tmpl[12] = {
+        { CKA_TOKEN, &tokenobj, sizeof(tokenobj) },
+        { CKA_CLASS, &key_class, sizeof(key_class) },
+        { CKA_KEY_TYPE, &key_type, sizeof(key_type) },
+        { CKA_VALUE, (void *)secret, secretlen },
+        { 0 },
+    };
+    size_t tmax = sizeof(tmpl) / sizeof(CK_ATTRIBUTE);
+    size_t tsize = 4;
+
+    P11PROV_debug("Creating secret key (%p[%zu]), token: %b, flags: %x", secret,
+                  secretlen, !session_key, usage);
+
+    /* Make it a token (permanent) object if necessary */
+    if (!session_key) {
+        tokenobj = true;
+    }
+
+    if (usage) {
+        rv = p11prov_usage_to_template(tmpl, &tsize, tmax, usage);
+        if (rv != CKR_OK) {
+            P11PROV_raise(provctx, rv, "Failed to set key usage");
+            return CKR_GENERAL_ERROR;
+        }
+    } else {
+        rv = CKR_ARGUMENTS_BAD;
+        P11PROV_raise(provctx, rv, "No key usage specified");
+        return CKR_GENERAL_ERROR;
+    }
+
+    slots = p11prov_ctx_get_slots(provctx);
+    if (!slots) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    slot = p11prov_get_default_slot(slots);
+    if (slot == CK_UNAVAILABLE_INFORMATION) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    rv = p11prov_take_login_session(provctx, slot, &session);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    rv = p11prov_CreateObject(provctx, p11prov_session_handle(session), tmpl,
+                              tsize, &key_handle);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    obj = p11prov_obj_new(provctx, slot, key_handle, key_class);
+    if (obj == NULL) {
+        rv = CKR_HOST_MEMORY;
+        goto done;
+    }
+    obj->data.key.type = key_type;
+    obj->data.key.bit_size = secretlen * 8;
+    obj->data.key.size = secretlen;
+
+    *ret = obj;
+    rv = CKR_OK;
+
+done:
+    p11prov_return_session(session);
+    return rv;
+}
+
+static CK_RV p11prov_store_generic_secret_key(P11PROV_CTX *provctx,
+                                              P11PROV_OBJ **ret,
+                                              const unsigned char *secret,
+                                              size_t secretlen, char *label,
+                                              CK_FLAGS usage, bool session_key)
+{
+    CK_OBJECT_CLASS key_class = CKO_SECRET_KEY;
+    CK_KEY_TYPE key_type = CKK_GENERIC_SECRET;
+    CK_SLOT_ID slot = CK_UNAVAILABLE_INFORMATION;
+    P11PROV_SLOTS_CTX *slots = NULL;
+    P11PROV_SESSION *session = NULL;
+    CK_OBJECT_HANDLE key_handle;
+    CK_BBOOL tokenobj = false;
+    P11PROV_OBJ *obj;
+    CK_RV rv;
+    CK_ATTRIBUTE tmpl[12] = {
+        { CKA_TOKEN, &tokenobj, sizeof(tokenobj) },
+        { CKA_CLASS, &key_class, sizeof(key_class) },
+        { CKA_KEY_TYPE, &key_type, sizeof(key_type) },
+        { CKA_VALUE, (void *)secret, secretlen },
+        { 0 },
+    };
+    size_t tmax = sizeof(tmpl) / sizeof(CK_ATTRIBUTE);
+    size_t tsize = 4;
+
+    P11PROV_debug("Creating secret key (%p[%zu]), token: %b, flags: %x", secret,
+                  secretlen, !session_key, usage);
+
+    /* Make it a token (permanent) object if necessary */
+    if (!session_key) {
+        tokenobj = true;
+    }
+
+    if (usage) {
+        rv = p11prov_usage_to_template(tmpl, &tsize, tmax, usage);
+        if (rv != CKR_OK) {
+            P11PROV_raise(provctx, rv, "Failed to set key usage");
+            return CKR_GENERAL_ERROR;
+        }
+    } else {
+        rv = CKR_ARGUMENTS_BAD;
+        P11PROV_raise(provctx, rv, "No key usage specified");
+        return CKR_GENERAL_ERROR;
+    }
+
+    slots = p11prov_ctx_get_slots(provctx);
+    if (!slots) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    slot = p11prov_get_default_slot(slots);
+    if (slot == CK_UNAVAILABLE_INFORMATION) {
+        rv = CKR_GENERAL_ERROR;
+        goto done;
+    }
+
+    rv = p11prov_take_login_session(provctx, slot, &session);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    rv = p11prov_CreateObject(provctx, p11prov_session_handle(session), tmpl,
+                              tsize, &key_handle);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    obj = p11prov_obj_new(provctx, slot, key_handle, key_class);
+    if (obj == NULL) {
+        rv = CKR_HOST_MEMORY;
+        goto done;
+    }
+    obj->data.key.type = key_type;
+    obj->data.key.bit_size = secretlen * 8;
+    obj->data.key.size = secretlen;
+
+    *ret = obj;
+    rv = CKR_OK;
+
+done:
+    p11prov_return_session(session);
+    return rv;
+}
+
+P11PROV_OBJ *p11prov_obj_import_secret_key(P11PROV_CTX *ctx, CK_KEY_TYPE type,
+                                           const unsigned char *key,
+                                           size_t keylen)
+{
+    CK_RV rv = CKR_KEY_INDIGESTIBLE;
+    P11PROV_OBJ *obj = NULL;
+    CK_FLAGS usage = CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY
+                     | CKF_WRAP | CKF_UNWRAP | CKF_DERIVE;
+
+    /* TODO: cache find, see other key types */
+
+    switch (type) {
+    case CKK_AES:
+        rv = p11prov_store_aes_key(ctx, &obj, key, keylen, NULL, usage, true);
+        if (rv != CKR_OK) {
+            P11PROV_raise(ctx, rv, "Failed to import");
+            goto done;
+        }
+        break;
+    case CKK_GENERIC_SECRET:
+        rv = p11prov_store_generic_secret_key(ctx, &obj, key, keylen, NULL,
+                                              usage, true);
+        if (rv != CKR_OK) {
+            P11PROV_raise(ctx, rv, "Failed to import");
+            goto done;
+        }
+        break;
+
+    default:
+        P11PROV_raise(ctx, rv, "Unsupported key type: %08lx", type);
+        goto done;
+    }
+
+done:
+    if (rv != CKR_OK) {
+        p11prov_obj_free(obj);
+        obj = NULL;
+    }
+    return obj;
+}
+
+#endif /* SKEY_SUPPORT */
 
 CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
                                             const void *pubkey,
@@ -4262,15 +5174,15 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
         return CKR_KEY_INDIGESTIBLE;
     }
 
-    if (key->class == CK_UNAVAILABLE_INFORMATION) {
-        key->class = CKO_PUBLIC_KEY;
-    }
-
     switch (key->data.key.type) {
     case CKK_EC:
     case CKK_EC_EDWARDS:
-        /* check that this is a public key */
-        if (key->class != CKO_PUBLIC_KEY) {
+        /* if class is still "domain parameters" convert it to
+         * a public key */
+        if (key->class == CKO_DOMAIN_PARAMETERS) {
+            key->class = CKO_PUBLIC_KEY;
+        } else if (key->class != CKO_PUBLIC_KEY) {
+            /* check that this is a public key */
             P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                           "Invalid Key type, not a public key");
             return CKR_KEY_INDIGESTIBLE;

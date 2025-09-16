@@ -136,6 +136,18 @@ if [[ -n $RSAPSS2PRIURI ]]; then
     ca -batch -in ${DEMOCA}/cert-rsa-pss.csr -keyfile ${PRIURI} -out ${DEMOCA}/cert.pem'
 fi
 
+if [[ -n $MLDSAPRIURI ]]; then
+    title PARA "Generating a new CSR with existing ML-DSA key in token"
+    ossl '
+    req -batch -noenc -new -key ${ED2PRIURI}
+        -subj "/CN=testing-ml-dsa/O=PKCS11 Provider/C=US"
+        -out ${DEMOCA}/cert-mldsa.csr'
+
+    title PARA "Signing the new ML-DSA key certificate"
+    ossl '
+    ca -batch -in ${DEMOCA}/cert-mldsa.csr -keyfile ${PRIURI} -out ${DEMOCA}/cert.pem'
+fi
+
 title PARA "Set up OCSP"
 ossl '
 req -batch -noenc -new -subj "/CN=OCSP/O=PKCS11 Provider/C=US"
@@ -156,7 +168,7 @@ trap kill_children EXIT
 #Unclear why but w/o -rmd sha1 this fails
 #call this without wrapper otherwise we have issues killing it later ...
 # shellcheck disable=SC2153 # the PRIURI is defined in setup-soft{hsm,okn}
-$CHECKER openssl ocsp -index "${DEMOCA}/index.txt" -rsigner \
+$CHECKER "$OPENSSL" ocsp -index "${DEMOCA}/index.txt" -rsigner \
     "${DEMOCA}/ocspSigning.pem" -rkey "${PRIURI}" -CA "${DEMOCA}/cacert.pem" \
     -rmd sha256 -port "${PORT}" -text &
 sleep 0.5

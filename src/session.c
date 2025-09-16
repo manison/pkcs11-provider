@@ -316,20 +316,24 @@ static CK_RV session_check(P11PROV_SESSION *session, CK_FLAGS flags)
     int ret;
 
     if (!session) {
+        P11PROV_debug("Checked session not set");
         return CKR_GENERAL_ERROR;
     }
 
     /* lockless check, if this fails in any way it is bad regardless */
     if (!session->in_use) {
+        P11PROV_debug("Checked session %lu in use", session->session);
         return CKR_GENERAL_ERROR;
     }
 
     /* no handle, nothing to check */
     if (session->session == CK_INVALID_HANDLE) {
+        P11PROV_debug("Checked session %lu handle invalid", session->session);
         return CKR_OK;
     }
 
     /* check that the pkcs11 session is still ok */
+    P11PROV_debug("Checking session %lu", session->session);
     ret = p11prov_GetSessionInfo(session->provctx, session->session,
                                  &session_info);
     if (ret == CKR_OK) {
@@ -780,6 +784,8 @@ static CK_RV slot_login(P11PROV_SLOT *slot, P11PROV_URI *uri,
     int num_open_sessions = 0;
     CK_RV ret;
 
+    P11PROV_debug("Slot login (slot=%p, uri=%p)", slot, uri);
+
     /* try to get a login_session */
     ret = fetch_session(pool, flags, true, &session);
     if (ret == CKR_USER_ALREADY_LOGGED_IN && _session == NULL) {
@@ -924,7 +930,8 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
         if (ret != CKR_OK) {
             goto done;
         }
-        if (reqlogin && !check_skip_login(provctx, slot)) {
+        if ((reqlogin && !check_skip_login(provctx, slot))
+            || p11prov_ctx_login_behavior(provctx) == PUBKEY_LOGIN_ALWAYS) {
             ret = slot_login(slot, uri, pw_cb, pw_cbarg, reqlogin, NULL);
             if (ret != CKR_OK) {
                 goto done;
@@ -958,7 +965,8 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
                 /* keep going */
                 continue;
             }
-            if (reqlogin && !check_skip_login(provctx, slot)) {
+            if ((reqlogin && !check_skip_login(provctx, slot))
+                || p11prov_ctx_login_behavior(provctx) == PUBKEY_LOGIN_ALWAYS) {
                 ret = slot_login(slot, uri, pw_cb, pw_cbarg, reqlogin, NULL);
                 if (ret != CKR_OK) {
                     /* keep going */
