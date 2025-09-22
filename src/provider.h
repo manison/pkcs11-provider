@@ -58,12 +58,70 @@
 #define P11PROV_NAME_RSAPSS "RSA-PSS"
 #define P11PROV_NAMES_RSAPSS "RSA-PSS:RSASSA-PSS:1.2.840.113549.1.1.10"
 #define P11PROV_DESCS_RSAPSS "PKCS11 RSA PSS Implementation"
+#define P11PROV_NAMES_RSA_SHA1 \
+    "RSA-SHA1:RSA-SHA-1:sha1WithRSAEncryption:1.2.840.113549.1.1.5"
+#define P11PROV_DESCS_RSA_SHA1 "PKCS11 RSA-SHA1 Implementation"
+#define P11PROV_NAMES_RSA_SHA256 \
+    "RSA-SHA2-256:RSA-SHA256:sha256WithRSAEncryption:1.2.840.113549.1.1.11"
+#define P11PROV_DESCS_RSA_SHA256 "PKCS11 RSA-SHA256 Implementation"
+#define P11PROV_NAMES_RSA_SHA384 \
+    "RSA-SHA2-384:RSA-SHA384:sha384WithRSAEncryption:1.2.840.113549.1.1.12"
+#define P11PROV_DESCS_RSA_SHA384 "PKCS11 RSA-SHA384 Implementation"
+#define P11PROV_NAMES_RSA_SHA512 \
+    "RSA-SHA2-512:RSA-SHA512:sha512WithRSAEncryption:1.2.840.113549.1.1.13"
+#define P11PROV_DESCS_RSA_SHA512 "PKCS11 RSA-SHA512 Implementation"
+#define P11PROV_NAMES_RSA_SHA224 \
+    "RSA-SHA2-224:RSA-SHA224:sha224WithRSAEncryption:1.2.840.113549.1.1.14"
+#define P11PROV_DESCS_RSA_SHA224 "PKCS11 RSA-SHA224 Implementation"
+#define P11PROV_NAMES_RSA_SHA3_224 \
+    "RSA-SHA3-224:id-rsassa-pkcs1-v1_5-with-sha3-224:2.16.840.1.101.3.4.3.13"
+#define P11PROV_DESCS_RSA_SHA3_224 "PKCS11 RSA-SHA3_224 Implementation"
+#define P11PROV_NAMES_RSA_SHA3_256 \
+    "RSA-SHA3-256:id-rsassa-pkcs1-v1_5-with-sha3-256:2.16.840.1.101.3.4.3.14"
+#define P11PROV_DESCS_RSA_SHA3_256 "PKCS11 RSA-SHA3_256 Implementation"
+#define P11PROV_NAMES_RSA_SHA3_384 \
+    "RSA-SHA3-384:id-rsassa-pkcs1-v1_5-with-sha3-384:2.16.840.1.101.3.4.3.15"
+#define P11PROV_DESCS_RSA_SHA3_384 "PKCS11 RSA-SHA3_384 Implementation"
+#define P11PROV_NAMES_RSA_SHA3_512 \
+    "RSA-SHA3-512:id-rsassa-pkcs1-v1_5-with-sha3-512:2.16.840.1.101.3.4.3.16"
+#define P11PROV_DESCS_RSA_SHA3_512 "PKCS11 RSA-SHA3_512 Implementation"
 #define P11PROV_NAME_EC "EC"
 #define P11PROV_NAMES_EC "EC:id-ecPublicKey:1.2.840.10045.2.1"
 #define P11PROV_DESCS_EC "PKCS11 EC Implementation"
 #define P11PROV_NAME_ECDSA "ECDSA"
 #define P11PROV_NAMES_ECDSA P11PROV_NAME_ECDSA
 #define P11PROV_DESCS_ECDSA "PKCS11 ECDSA Implementation"
+#define P11PROV_NAMES_ECDSA_SHA1 \
+    "ECDSA-SHA1:ECDSA-SHA-1:ecdsa-with-SHA1:1.2.840.10045.4.1"
+#define P11PROV_DESCS_ECDSA_SHA1 "PKCS11 ECDSA-SHA1 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA224 \
+    "ECDSA-SHA2-224:ECDSA-SHA224:ecdsa-with-SHA224:1.2.840.10045.4.3.1"
+#define P11PROV_DESCS_ECDSA_SHA224 "PKCS11 ECDSA-SHA224 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA256 \
+    "ECDSA-SHA2-256:ECDSA-SHA256:ecdsa-with-SHA256:1.2.840.10045.4.3.2"
+#define P11PROV_DESCS_ECDSA_SHA256 "PKCS11 ECDSA-SHA256 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA384 \
+    "ECDSA-SHA2-384:ECDSA-SHA384:ecdsa-with-SHA384:1.2.840.10045.4.3.3"
+#define P11PROV_DESCS_ECDSA_SHA384 "PKCS11 ECDSA-SHA384 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA512 \
+    "ECDSA-SHA2-512:ECDSA-SHA512:ecdsa-with-SHA512:1.2.840.10045.4.3.4"
+#define P11PROV_DESCS_ECDSA_SHA512 "PKCS11 ECDSA-SHA512 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA3_224 \
+    "ECDSA-SHA3-224:ecdsa_with_SHA3-224:id-ecdsa-with-sha3-224:2.16.840.1." \
+    "101.3.4.3.9"
+#define P11PROV_DESCS_ECDSA_SHA3_224 "PKCS11 ECDSA-SHA3_224 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA3_256 \
+    "ECDSA-SHA3-256:ecdsa_with_SHA3-256:id-ecdsa-with-sha3-256:2.16.840.1." \
+    "101.3.4.3.10"
+#define P11PROV_DESCS_ECDSA_SHA3_256 "PKCS11 ECDSA-SHA3_256 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA3_384 \
+    "ECDSA-SHA3-384:ecdsa_with_SHA3-384:id-ecdsa-with-sha3-384:2.16.840.1." \
+    "101.3.4.3.11"
+#define P11PROV_DESCS_ECDSA_SHA3_384 "PKCS11 ECDSA-SHA3_384 Implementation"
+#define P11PROV_NAMES_ECDSA_SHA3_512 \
+    "ECDSA-SHA3-512:ecdsa_with_SHA3-512:id-ecdsa-with-sha3-512:2.16.840.1." \
+    "101.3.4.3.12"
+#define P11PROV_DESCS_ECDSA_SHA3_512 "PKCS11 ECDSA-SHA3_512 Implementation"
 #define P11PROV_NAME_ECDH "ECDH"
 #define P11PROV_NAMES_ECDH P11PROV_NAME_ECDH
 #define P11PROV_DESCS_ECDH "PKCS11 ECDH Implementation"
@@ -73,9 +131,24 @@
 #define P11PROV_NAMES_ED25519 "ED25519:1.3.101.112"
 #define P11PROV_NAME_ED25519 "ED25519"
 #define P11PROV_DESCS_ED25519 "PKCS11 ED25519 Implementation"
+#define P11PROV_NAMES_ED25519ph "ED25519ph"
+#define P11PROV_DESCS_ED25519ph "PKCS11 ED25519ph implementation"
+#define P11PROV_NAMES_ED25519ctx "ED25519ctx"
+#define P11PROV_DESCS_ED25519ctx "PKCS11 ED25519ctx implementation"
 #define P11PROV_NAMES_ED448 "ED448:1.3.101.113"
 #define P11PROV_NAME_ED448 "ED448"
 #define P11PROV_DESCS_ED448 "PKCS11 ED448 Implementation"
+#define P11PROV_NAMES_ED448ph "ED448ph"
+#define P11PROV_DESCS_ED448ph "PKCS11 ED448ph implementation"
+#define P11PROV_NAMES_ML_DSA_44 \
+    "ML-DSA-44:MLDSA44:2.16.840.1.101.3.4.3.17:id-ml-dsa-44"
+#define P11PROV_DESCS_ML_DSA_44 "PKCS11 ML-DSA-44 implementation"
+#define P11PROV_NAMES_ML_DSA_65 \
+    "ML-DSA-65:MLDSA65:2.16.840.1.101.3.4.3.18:id-ml-dsa-65"
+#define P11PROV_DESCS_ML_DSA_65 "PKCS11 ML-DSA-65 implementation"
+#define P11PROV_NAMES_ML_DSA_87 \
+    "ML-DSA-87:MLDSA87:2.16.840.1.101.3.4.3.19:id-ml-dsa-87"
+#define P11PROV_DESCS_ML_DSA_87 "PKCS11 ML-DSA-87 implementation"
 #define P11PROV_NAMES_RAND "PKCS11-RAND"
 #define P11PROV_DESCS_RAND "PKCS11 Random Generator"
 #define P11PROV_NAME_CERTIFICATE "CERTIFICATE"
@@ -153,6 +226,9 @@
 #define P11PROV_DESCS_AES_192_CTS "AES-192 CTS PKCS11 Provider Implementation"
 #define P11PROV_NAMES_AES_128_CTS "AES-128-CBC-CTS"
 #define P11PROV_DESCS_AES_128_CTS "AES-128 CTS PKCS11 Provider Implementation"
+#define P11PROV_NAME_GENERIC_SECRET "GENERIC-SECRET"
+#define P11PROV_NAMES_GENERIC_SECRET P11PROV_NAME_GENERIC_SECRET
+#define P11PROV_DESCS_GENERIC_SECRET "PKCS11 Generic Secret Implementation"
 
 #endif
 
@@ -252,7 +328,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 #include "objects.h"
 #include "keymgmt.h"
 #include "store.h"
-#include "signature.h"
+#include "sig/signature.h"
 #include "asymmetric_cipher.h"
 #include "exchange.h"
 #include "kdf.h"
@@ -271,5 +347,6 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 
 /* TLS */
 int tls_group_capabilities(OSSL_CALLBACK *cb, void *arg);
+int tls_sigalg_capabilities(OSSL_CALLBACK *cb, void *arg);
 
 #endif /* _PROVIDER_H */

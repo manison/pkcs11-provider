@@ -24,10 +24,12 @@ CK_SLOT_ID p11prov_obj_get_slotid(P11PROV_OBJ *obj);
 CK_OBJECT_HANDLE p11prov_obj_get_handle(P11PROV_OBJ *obj);
 CK_OBJECT_CLASS p11prov_obj_get_class(P11PROV_OBJ *obj);
 CK_ATTRIBUTE *p11prov_obj_get_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type);
+CK_RV p11prov_obj_add_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE *attr);
 bool p11prov_obj_get_bool(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type, bool def);
 CK_KEY_TYPE p11prov_obj_get_key_type(P11PROV_OBJ *obj);
 CK_ULONG p11prov_obj_get_key_bit_size(P11PROV_OBJ *obj);
 CK_ULONG p11prov_obj_get_key_size(P11PROV_OBJ *obj);
+CK_ULONG p11prov_obj_get_key_param_set(P11PROV_OBJ *obj);
 void p11prov_obj_to_store_reference(P11PROV_OBJ *obj, void **reference,
                                     size_t *reference_sz);
 P11PROV_OBJ *p11prov_obj_from_reference(const void *reference,
@@ -36,6 +38,9 @@ P11PROV_CTX *p11prov_obj_get_prov_ctx(P11PROV_OBJ *obj);
 P11PROV_OBJ *p11prov_obj_get_associated(P11PROV_OBJ *obj);
 void p11prov_obj_set_associated(P11PROV_OBJ *obj, P11PROV_OBJ *assoc);
 const char *p11prov_obj_get_public_uri(P11PROV_OBJ *obj);
+void *p11prov_obj_from_typed_reference(const void *reference,
+                                       size_t reference_sz,
+                                       CK_KEY_TYPE key_type);
 
 typedef CK_RV (*store_obj_callback)(void *, P11PROV_OBJ *);
 CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
@@ -74,7 +79,9 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *obj1, P11PROV_OBJ *obj2, CK_KEY_TYPE type,
                         int cmp_type);
 
 CK_RV p11prov_obj_import_key(P11PROV_OBJ *key, CK_KEY_TYPE type,
-                             CK_OBJECT_CLASS class, const OSSL_PARAM params[]);
+                             CK_OBJECT_CLASS class,
+                             CK_ML_DSA_PARAMETER_SET_TYPE param_set,
+                             const OSSL_PARAM params[]);
 
 P11PROV_OBJ *p11prov_obj_import_secret_key(P11PROV_CTX *ctx, CK_KEY_TYPE type,
                                            const unsigned char *key,
@@ -110,5 +117,9 @@ P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
 #define ED448_EC_PARAMS_LEN 12
 extern const CK_BYTE ed25519_ec_params[];
 extern const CK_BYTE ed448_ec_params[];
+
+#define MLDSA_44 "ML-DSA-44"
+#define MLDSA_65 "ML-DSA-65"
+#define MLDSA_87 "ML-DSA-87"
 
 #endif /* _OBJECTS_H */

@@ -115,6 +115,7 @@ test_programs = {
   'pincache': ['pincache.c'],
   'ccerts': ['ccerts.c', 'util.c'],
   'tecx': ['tecx.c', 'util.c'],
+  'tskey-kdf': ['tskey_kdf.c', 'util.c'],
 }
 
 test_executables = []
@@ -142,6 +143,7 @@ endforeach
 
 tests = {
   'basic': {'suites': all_suites},
+  'mldsa': {'suites': ['kryoptic']},
   'pubkey': {'suites': all_suites},
   'certs': {'suites': all_suites},
   'ecc': {'suites': all_suites},
@@ -153,13 +155,14 @@ tests = {
   'oaepsha2': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'hkdf': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'imported' : {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'pem_encoder': {'suites': all_suites},
   'rsa': {'suites': all_suites},
   'rsapss': {'suites': all_suites},
   'rsapssam': {'suites': ['softhsm', 'kryoptic']},
   'genkey': {'suites': all_suites},
   'pkey': {'suites': all_suites},
   'session': {'suites': all_suites},
-  'skey': {'suites': all_suites},
+  'skey': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'rand': {'suites': all_suites},
   'readkeys': {'suites': all_suites},
   'tls': {'suites': all_suites, 'is_parallel': false, 'timeout': 60},

@@ -12,7 +12,6 @@
     <ClCompile Include="src\objects.c" />
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\session.c" />
-    <ClCompile Include="src\signature.c" />
     <ClCompile Include="src\store.c" />
     <ClCompile Include="src\tls.c" />
     <ClCompile Include="src\util.c" />
@@ -22,6 +21,21 @@
     <ClCompile Include="src\pk11_uri.c" />
     <ClCompile Include="src\cipher.c" />
     <ClCompile Include="src\skeymgmt.c" />
+    <ClCompile Include="src\sig\ecdsa.c">
+      <Filter>sig</Filter>
+    </ClCompile>
+    <ClCompile Include="src\sig\eddsa.c">
+      <Filter>sig</Filter>
+    </ClCompile>
+    <ClCompile Include="src\sig\mldsa.c">
+      <Filter>sig</Filter>
+    </ClCompile>
+    <ClCompile Include="src\sig\rsasig.c">
+      <Filter>sig</Filter>
+    </ClCompile>
+    <ClCompile Include="src\sig\signature.c">
+      <Filter>sig</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -36,7 +50,6 @@
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\session.h" />
-    <ClInclude Include="src\signature.h" />
     <ClInclude Include="src\store.h" />
     <ClInclude Include="src\util.h" />
     <ClInclude Include="src\platform\windows\win_compat.h">
@@ -57,6 +70,12 @@
     <ClInclude Include="src\pk11_uri.h" />
     <ClInclude Include="src\cipher.h" />
     <ClInclude Include="src\skeymgmt.h" />
+    <ClInclude Include="src\sig\internal.h">
+      <Filter>sig</Filter>
+    </ClInclude>
+    <ClInclude Include="src\sig\signature.h">
+      <Filter>sig</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">
@@ -64,6 +83,9 @@
     </Filter>
     <Filter Include="platform\windows">
       <UniqueIdentifier>{f465a435-fd43-4e78-b445-106297012c1d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sig">
+      <UniqueIdentifier>{da4ec1a0-572c-4045-ae92-121aeb5167d3}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

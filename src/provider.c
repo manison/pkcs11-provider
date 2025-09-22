@@ -858,6 +858,8 @@ static CK_RV alg_set_op(OSSL_ALGORITHM **op, int idx, OSSL_ALGORITHM *alg)
         CKM_ECDSA_SHA384, CKM_ECDSA_SHA512, CKM_ECDSA_SHA3_224, \
         CKM_ECDSA_SHA3_256, CKM_ECDSA_SHA3_384, CKM_ECDSA_SHA3_512
 
+#define PQC_MECHS CKM_ML_DSA, CKM_ML_DSA_KEY_PAIR_GEN
+
 #if SKEY_SUPPORT == 1
 #define AES_MECHS \
     CKM_AES_ECB, CKM_AES_CBC, CKM_AES_CBC_PAD, CKM_AES_CTR, CKM_AES_CTS, \
@@ -916,12 +918,14 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                              CKM_HKDF_DERIVE,
                              DIGEST_MECHS,
                              CKM_EDDSA,
+                             PQC_MECHS,
 #if SKEY_SUPPORT == 1
                              AES_MECHS
 #endif
     };
     bool add_rsasig = false;
     bool add_rsaenc = false;
+    bool add_ecdsasig = false;
     int cl_size = sizeof(checklist) / sizeof(CK_ULONG);
     int digest_idx = 0;
     int kdf_idx = 0;
@@ -969,9 +973,65 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
             case CKM_RSA_PKCS:
                 add_rsasig = true;
                 add_rsaenc = true;
-                UNCHECK_MECHS(CKM_RSA_PKCS_KEY_PAIR_GEN, RSA_SIG_MECHS);
+                UNCHECK_MECHS(CKM_RSA_PKCS_KEY_PAIR_GEN);
                 UNCHECK_MECHS(CKM_RSA_PKCS_KEY_PAIR_GEN, RSA_ENC_MECHS);
                 break;
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+            case CKM_SHA1_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA1, signature, prop,
+                             p11prov_rsa_sha1_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA1_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA224_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA224, signature, prop,
+                             p11prov_rsa_sha224_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA224_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA256_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA256, signature, prop,
+                             p11prov_rsa_sha256_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA256_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA384_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA384, signature, prop,
+                             p11prov_rsa_sha384_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA384_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA512_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA512, signature, prop,
+                             p11prov_rsa_sha512_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA512_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA3_224_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA3_224, signature, prop,
+                             p11prov_rsa_sha3_224_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA3_224_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA3_256_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA3_256, signature, prop,
+                             p11prov_rsa_sha3_256_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA3_256_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA3_384_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA3_384, signature, prop,
+                             p11prov_rsa_sha3_384_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA3_384_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+            case CKM_SHA3_512_RSA_PKCS:
+                ADD_ALGO_EXT(RSA_SHA3_512, signature, prop,
+                             p11prov_rsa_sha3_512_signature_functions);
+                add_rsasig = true;
+                UNCHECK_MECHS(CKM_SHA3_512_RSA_PKCS, CKM_RSA_PKCS_KEY_PAIR_GEN);
+                break;
+#else
             case CKM_SHA1_RSA_PKCS:
             case CKM_SHA224_RSA_PKCS:
             case CKM_SHA256_RSA_PKCS:
@@ -984,6 +1044,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 add_rsasig = true;
                 UNCHECK_MECHS(CKM_RSA_PKCS_KEY_PAIR_GEN, RSA_SIG_MECHS);
                 break;
+#endif
             case CKM_RSA_PKCS_PSS:
             case CKM_SHA1_RSA_PKCS_PSS:
             case CKM_SHA224_RSA_PKCS_PSS:
@@ -1007,6 +1068,65 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN);
                 break;
             case CKM_ECDSA:
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA);
+                break;
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+            case CKM_ECDSA_SHA1:
+                ADD_ALGO_EXT(ECDSA_SHA1, signature, prop,
+                             p11prov_ecdsa_sha1_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA1);
+                break;
+            case CKM_ECDSA_SHA224:
+                ADD_ALGO_EXT(ECDSA_SHA224, signature, prop,
+                             p11prov_ecdsa_sha224_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA224);
+                break;
+            case CKM_ECDSA_SHA256:
+                ADD_ALGO_EXT(ECDSA_SHA256, signature, prop,
+                             p11prov_ecdsa_sha256_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA256);
+                break;
+            case CKM_ECDSA_SHA384:
+                ADD_ALGO_EXT(ECDSA_SHA384, signature, prop,
+                             p11prov_ecdsa_sha384_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA384);
+                break;
+            case CKM_ECDSA_SHA512:
+                ADD_ALGO_EXT(ECDSA_SHA512, signature, prop,
+                             p11prov_ecdsa_sha512_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA512);
+                break;
+            case CKM_ECDSA_SHA3_224:
+                ADD_ALGO_EXT(ECDSA_SHA3_224, signature, prop,
+                             p11prov_ecdsa_sha3_224_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA3_224);
+                break;
+            case CKM_ECDSA_SHA3_256:
+                ADD_ALGO_EXT(ECDSA_SHA3_256, signature, prop,
+                             p11prov_ecdsa_sha3_256_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA3_256);
+                break;
+            case CKM_ECDSA_SHA3_384:
+                ADD_ALGO_EXT(ECDSA_SHA3_384, signature, prop,
+                             p11prov_ecdsa_sha3_384_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA3_384);
+                break;
+            case CKM_ECDSA_SHA3_512:
+                ADD_ALGO_EXT(ECDSA_SHA3_512, signature, prop,
+                             p11prov_ecdsa_sha3_512_signature_functions);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA3_512);
+                break;
+#else
             case CKM_ECDSA_SHA1:
             case CKM_ECDSA_SHA224:
             case CKM_ECDSA_SHA256:
@@ -1016,9 +1136,14 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
             case CKM_ECDSA_SHA3_256:
             case CKM_ECDSA_SHA3_384:
             case CKM_ECDSA_SHA3_512:
-                ADD_ALGO(ECDSA, ecdsa, signature, prop);
-                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, ECDSA_SIG_MECHS);
+                add_ecdsasig = true;
+                UNCHECK_MECHS(CKM_EC_KEY_PAIR_GEN, CKM_ECDSA_SHA1,
+                              CKM_ECDSA_SHA224, CKM_ECDSA_SHA256,
+                              CKM_ECDSA_SHA384, CKM_ECDSA_SHA512,
+                              CKM_ECDSA_SHA3_224, CKM_ECDSA_SHA3_256,
+                              CKM_ECDSA_SHA3_384, CKM_ECDSA_SHA3_512);
                 break;
+#endif
             case CKM_ECDH1_DERIVE:
             case CKM_ECDH1_COFACTOR_DERIVE:
                 ADD_ALGO(ECDH, ecdh, exchange, prop);
@@ -1077,10 +1202,28 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 break;
             case CKM_EDDSA:
                 ADD_ALGO_EXT(ED25519, signature, prop,
-                             p11prov_eddsa_signature_functions);
+                             p11prov_ed25519_signature_functions);
                 ADD_ALGO_EXT(ED448, signature, prop,
-                             p11prov_eddsa_signature_functions);
+                             p11prov_ed448_signature_functions);
                 UNCHECK_MECHS(CKM_EC_EDWARDS_KEY_PAIR_GEN, CKM_EDDSA);
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+                ADD_ALGO_EXT(ED25519ph, signature, prop,
+                             p11prov_ed25519ph_signature_functions);
+                ADD_ALGO_EXT(ED25519ctx, signature, prop,
+                             p11prov_ed25519ctx_signature_functions);
+                ADD_ALGO_EXT(ED448ph, signature, prop,
+                             p11prov_ed448ph_signature_functions);
+#endif
+                break;
+            case CKM_ML_DSA:
+            case CKM_ML_DSA_KEY_PAIR_GEN:
+                ADD_ALGO_EXT(ML_DSA_44, signature, prop,
+                             p11prov_mldsa_44_signature_functions);
+                ADD_ALGO_EXT(ML_DSA_65, signature, prop,
+                             p11prov_mldsa_65_signature_functions);
+                ADD_ALGO_EXT(ML_DSA_87, signature, prop,
+                             p11prov_mldsa_87_signature_functions);
+                UNCHECK_MECHS(CKM_ML_DSA_KEY_PAIR_GEN, CKM_ML_DSA);
                 break;
 #if SKEY_SUPPORT == 1
             case CKM_AES_ECB:
@@ -1135,8 +1278,8 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 break;
 #endif
             default:
-                P11PROV_raise(ctx, CKR_GENERAL_ERROR,
-                              "Unhandled mechianism %lu", mech);
+                P11PROV_raise(ctx, CKR_GENERAL_ERROR, "Unhandled mechanism %lu",
+                              mech);
                 break;
             }
         }
@@ -1146,6 +1289,9 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
 
     if (add_rsasig) {
         ADD_ALGO(RSA, rsa, signature, prop);
+    }
+    if (add_ecdsasig) {
+        ADD_ALGO(ECDSA, ecdsa, signature, prop);
     }
     if (add_rsaenc) {
         ADD_ALGO(RSA, rsa, asym_cipher, prop);
@@ -1225,6 +1371,21 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
                  p11prov_ec_edwards_encoder_text_functions);
     ADD_ALGO_EXT(ED448, encoder, DEFAULT_PROPERTY(",output=text"),
                  p11prov_ec_edwards_encoder_text_functions);
+    ADD_ALGO_EXT(ML_DSA_44, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mldsa_encoder_text_functions);
+    ADD_ALGO_EXT(ML_DSA_44, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mldsa_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ML_DSA_65, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mldsa_encoder_text_functions);
+    ADD_ALGO_EXT(ML_DSA_65, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mldsa_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ML_DSA_87, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mldsa_encoder_text_functions);
+    ADD_ALGO_EXT(ML_DSA_87, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mldsa_encoder_spki_der_functions);
     if (ctx->encode_pkey_as_pk11_uri) {
         ADD_ALGO_EXT(RSA, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
@@ -1241,6 +1402,15 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
         ADD_ALGO_EXT(ED448, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
                      p11prov_ec_edwards_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_DSA_44, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mldsa_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_DSA_65, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mldsa_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_DSA_87, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mldsa_encoder_priv_key_info_pem_functions);
     }
 
     TERM_ALGO(encoder);
@@ -1273,11 +1443,15 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
     ADD_ALGO(HKDF, hkdf, keymgmt, prop);
     ADD_ALGO_EXT(ED25519, keymgmt, prop, p11prov_ed25519_keymgmt_functions);
     ADD_ALGO_EXT(ED448, keymgmt, prop, p11prov_ed448_keymgmt_functions);
+    ADD_ALGO_EXT(ML_DSA_44, keymgmt, prop, p11prov_mldsa44_keymgmt_functions);
+    ADD_ALGO_EXT(ML_DSA_65, keymgmt, prop, p11prov_mldsa65_keymgmt_functions);
+    ADD_ALGO_EXT(ML_DSA_87, keymgmt, prop, p11prov_mldsa87_keymgmt_functions);
     TERM_ALGO(keymgmt);
 
 #if SKEY_SUPPORT == 1
     /* skeymgmt */
     ADD_ALGO(AES, aes, skeymgmt, prop);
+    ADD_ALGO(GENERIC_SECRET, generic_secret, skeymgmt, prop);
     TERM_ALGO(skeymgmt);
 #endif
 
@@ -1373,6 +1547,9 @@ static int p11prov_get_capabilities(void *provctx, const char *capability,
 
     if (OPENSSL_strcasecmp(capability, "TLS-GROUP") == 0) {
         ret = tls_group_capabilities(cb, arg);
+    }
+    if (OPENSSL_strcasecmp(capability, "TLS-SIGALG") == 0) {
+        ret = tls_sigalg_capabilities(cb, arg);
     }
 
     return ret;

@@ -42,6 +42,7 @@ cscope.out
 cscope.in.out
 cscope.po.out
 __pycache__/
+*.swp
 
 # Visual Studio ignore patterns
 .vs/

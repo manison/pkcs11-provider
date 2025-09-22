@@ -27,7 +27,7 @@
     <TargetName>pkcs11</TargetName>
     <IntDir>$(ProjectDir)obj\$(Platform)\$(Configuration)\</IntDir>
     <OutDir>$(MSBuildThisFileDirectory)bin\$(Platform)\$(Configuration)\</OutDir>
-    <Version>1.0</Version>
+    <Version>1.1</Version>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
@@ -55,7 +55,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Label="Version">
     <BuildInfo Condition="'$(BuildInfo)'==''">Built for Windows</BuildInfo>
-    <VersionDefinitions>PACKAGE_NAME=&quot;pkcs11-provider&quot;;PACKAGE_MAJOR=1;PACKAGE_MINOR=0;P11PROV_VERSION=&quot;$(Version)&quot;;P11PROV_BUILDINFO=&quot;$(BuildInfo)&quot;</VersionDefinitions>
+    <VersionDefinitions>PACKAGE_NAME="pkcs11-provider";PACKAGE_MAJOR=1;PACKAGE_MINOR=1;P11PROV_VERSION="$(Version)";P11PROV_BUILDINFO="$(BuildInfo)"</VersionDefinitions>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -66,7 +66,7 @@
       <CompileAs>CompileAsC</CompileAs>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <PreprocessorDefinitions>WIN32;_WINDOWS;$(VersionDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -125,7 +125,11 @@
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\random.c" />
     <ClCompile Include="src\session.c" />
-    <ClCompile Include="src\signature.c" />
+    <ClCompile Include="src\sig\ecdsa.c" />
+    <ClCompile Include="src\sig\eddsa.c" />
+    <ClCompile Include="src\sig\mldsa.c" />
+    <ClCompile Include="src\sig\rsasig.c" />
+    <ClCompile Include="src\sig\signature.c" />
     <ClCompile Include="src\skeymgmt.c" />
     <ClCompile Include="src\slot.c" />
     <ClCompile Include="src\store.c" />
@@ -153,7 +157,8 @@
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\random.h" />
     <ClInclude Include="src\session.h" />
-    <ClInclude Include="src\signature.h" />
+    <ClInclude Include="src\sig\internal.h" />
+    <ClInclude Include="src\sig\signature.h" />
     <ClInclude Include="src\skeymgmt.h" />
     <ClInclude Include="src\slot.h" />
     <ClInclude Include="src\store.h" />
