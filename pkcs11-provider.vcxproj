@@ -67,6 +67,7 @@
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <PreprocessorDefinitions>WIN32;_WINDOWS;$(VersionDefinitions);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ObjectFileName>$(IntDir)%(RelativeDir)%(Filename).obj</ObjectFileName>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -119,8 +120,15 @@
     <ClCompile Include="src\exchange.c" />
     <ClCompile Include="src\interface.c" />
     <ClCompile Include="src\kdf.c" />
+    <ClCompile Include="src\kem.c" />
     <ClCompile Include="src\keymgmt.c" />
-    <ClCompile Include="src\objects.c" />
+    <ClCompile Include="src\obj\create.c" />
+    <ClCompile Include="src\obj\export.c" />
+    <ClCompile Include="src\obj\fetch.c" />
+    <ClCompile Include="src\obj\keymgmt.c" />
+    <ClCompile Include="src\obj\object.c" />
+    <ClCompile Include="src\obj\pool.c" />
+    <ClCompile Include="src\obj\store.c" />
     <ClCompile Include="src\pk11_uri.c" />
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\random.c" />
@@ -146,8 +154,10 @@
     <ClInclude Include="src\exchange.h" />
     <ClInclude Include="src\interface.h" />
     <ClInclude Include="src\kdf.h" />
+    <ClInclude Include="src\kem.h" />
     <ClInclude Include="src\keymgmt.h" />
-    <ClInclude Include="src\objects.h" />
+    <ClInclude Include="src\obj\internal.h" />
+    <ClInclude Include="src\obj\object.h" />
     <ClInclude Include="src\pk11_uri.h" />
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\platform\windows\win_atomic.h" />

@@ -9,7 +9,6 @@
     <ClCompile Include="src\interface.c" />
     <ClCompile Include="src\kdf.c" />
     <ClCompile Include="src\keymgmt.c" />
-    <ClCompile Include="src\objects.c" />
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\session.c" />
     <ClCompile Include="src\store.c" />
@@ -36,6 +35,28 @@
     <ClCompile Include="src\sig\signature.c">
       <Filter>sig</Filter>
     </ClCompile>
+    <ClCompile Include="src\kem.c" />
+    <ClCompile Include="src\obj\create.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\fetch.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\keymgmt.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\object.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\pool.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\store.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\export.c">
+      <Filter>obj</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -46,7 +67,6 @@
     <ClInclude Include="src\interface.h" />
     <ClInclude Include="src\kdf.h" />
     <ClInclude Include="src\keymgmt.h" />
-    <ClInclude Include="src\objects.h" />
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\session.h" />
@@ -76,6 +96,13 @@
     <ClInclude Include="src\sig\signature.h">
       <Filter>sig</Filter>
     </ClInclude>
+    <ClInclude Include="src\kem.h" />
+    <ClInclude Include="src\obj\internal.h">
+      <Filter>obj</Filter>
+    </ClInclude>
+    <ClInclude Include="src\obj\object.h">
+      <Filter>obj</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">
@@ -86,6 +113,9 @@
     </Filter>
     <Filter Include="sig">
       <UniqueIdentifier>{da4ec1a0-572c-4045-ae92-121aeb5167d3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="obj">
+      <UniqueIdentifier>{979df036-34cf-4c7c-9913-2fac5a8a278d}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>

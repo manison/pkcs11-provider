@@ -149,6 +149,15 @@
 #define P11PROV_NAMES_ML_DSA_87 \
     "ML-DSA-87:MLDSA87:2.16.840.1.101.3.4.3.19:id-ml-dsa-87"
 #define P11PROV_DESCS_ML_DSA_87 "PKCS11 ML-DSA-87 implementation"
+#define P11PROV_NAMES_ML_KEM_512 \
+    "ML-KEM-512:MLKEM512:id-alg-ml-kem-512:2.16.840.1.101.3.4.4.1"
+#define P11PROV_DESCS_ML_KEM_512 "PKCS11 ML-KEM-512 implementation"
+#define P11PROV_NAMES_ML_KEM_768 \
+    "ML-KEM-768:MLKEM768:id-alg-ml-kem-768:2.16.840.1.101.3.4.4.2"
+#define P11PROV_DESCS_ML_KEM_768 "PKCS11 ML-KEM-768 implementation"
+#define P11PROV_NAMES_ML_KEM_1024 \
+    "ML-KEM-1024:MLKEM1024:id-alg-ml-kem-1024:2.16.840.1.101.3.4.4.3"
+#define P11PROV_DESCS_ML_KEM_1024 "PKCS11 ML-KEM-1024 implementation"
 #define P11PROV_NAMES_RAND "PKCS11-RAND"
 #define P11PROV_DESCS_RAND "PKCS11 Random Generator"
 #define P11PROV_NAME_CERTIFICATE "CERTIFICATE"
@@ -325,7 +334,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
     static OSSL_FUNC_##type##_##name##_fn prefix##_##name
 
 #include "interface.h"
-#include "objects.h"
+#include "obj/object.h"
 #include "keymgmt.h"
 #include "store.h"
 #include "sig/signature.h"
@@ -339,6 +348,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 #include "slot.h"
 #include "random.h"
 #include "pk11_uri.h"
+#include "kem.h"
 
 #if SKEY_SUPPORT == 1
 #include "cipher.h"
