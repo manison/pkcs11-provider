@@ -335,7 +335,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 
 #include "interface.h"
 #include "obj/object.h"
-#include "keymgmt.h"
+#include "kmgmt/keymgmt.h"
 #include "store.h"
 #include "sig/signature.h"
 #include "asymmetric_cipher.h"
@@ -352,7 +352,7 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 
 #if SKEY_SUPPORT == 1
 #include "cipher.h"
-#include "skeymgmt.h"
+#include "kmgmt/skey.h"
 #endif
 
 /* TLS */

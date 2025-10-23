@@ -121,7 +121,13 @@
     <ClCompile Include="src\interface.c" />
     <ClCompile Include="src\kdf.c" />
     <ClCompile Include="src\kem.c" />
-    <ClCompile Include="src\keymgmt.c" />
+    <ClCompile Include="src\kmgmt\common.c" />
+    <ClCompile Include="src\kmgmt\ec.c" />
+    <ClCompile Include="src\kmgmt\hkdf.c" />
+    <ClCompile Include="src\kmgmt\mldsa.c" />
+    <ClCompile Include="src\kmgmt\mlkem.c" />
+    <ClCompile Include="src\kmgmt\rsa.c" />
+    <ClCompile Include="src\kmgmt\skey.c" />
     <ClCompile Include="src\obj\create.c" />
     <ClCompile Include="src\obj\export.c" />
     <ClCompile Include="src\obj\fetch.c" />
@@ -138,7 +144,6 @@
     <ClCompile Include="src\sig\mldsa.c" />
     <ClCompile Include="src\sig\rsasig.c" />
     <ClCompile Include="src\sig\signature.c" />
-    <ClCompile Include="src\skeymgmt.c" />
     <ClCompile Include="src\slot.c" />
     <ClCompile Include="src\store.c" />
     <ClCompile Include="src\tls.c" />
@@ -155,7 +160,9 @@
     <ClInclude Include="src\interface.h" />
     <ClInclude Include="src\kdf.h" />
     <ClInclude Include="src\kem.h" />
-    <ClInclude Include="src\keymgmt.h" />
+    <ClInclude Include="src\kmgmt\internal.h" />
+    <ClInclude Include="src\kmgmt\keymgmt.h" />
+    <ClInclude Include="src\kmgmt\skey.h" />
     <ClInclude Include="src\obj\internal.h" />
     <ClInclude Include="src\obj\object.h" />
     <ClInclude Include="src\pk11_uri.h" />
@@ -169,7 +176,6 @@
     <ClInclude Include="src\session.h" />
     <ClInclude Include="src\sig\internal.h" />
     <ClInclude Include="src\sig\signature.h" />
-    <ClInclude Include="src\skeymgmt.h" />
     <ClInclude Include="src\slot.h" />
     <ClInclude Include="src\store.h" />
     <ClInclude Include="src\util.h" />

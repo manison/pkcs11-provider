@@ -8,7 +8,6 @@
     <ClCompile Include="src\exchange.c" />
     <ClCompile Include="src\interface.c" />
     <ClCompile Include="src\kdf.c" />
-    <ClCompile Include="src\keymgmt.c" />
     <ClCompile Include="src\provider.c" />
     <ClCompile Include="src\session.c" />
     <ClCompile Include="src\store.c" />
@@ -19,7 +18,6 @@
     <ClCompile Include="src\decoder.c" />
     <ClCompile Include="src\pk11_uri.c" />
     <ClCompile Include="src\cipher.c" />
-    <ClCompile Include="src\skeymgmt.c" />
     <ClCompile Include="src\sig\ecdsa.c">
       <Filter>sig</Filter>
     </ClCompile>
@@ -57,6 +55,27 @@
     <ClCompile Include="src\obj\export.c">
       <Filter>obj</Filter>
     </ClCompile>
+    <ClCompile Include="src\kmgmt\common.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\ec.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\hkdf.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\mldsa.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\mlkem.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\skey.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\kmgmt\rsa.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -66,7 +85,6 @@
     <ClInclude Include="src\exchange.h" />
     <ClInclude Include="src\interface.h" />
     <ClInclude Include="src\kdf.h" />
-    <ClInclude Include="src\keymgmt.h" />
     <ClInclude Include="src\pkcs11.h" />
     <ClInclude Include="src\provider.h" />
     <ClInclude Include="src\session.h" />
@@ -89,7 +107,6 @@
     <ClInclude Include="src\decoder.h" />
     <ClInclude Include="src\pk11_uri.h" />
     <ClInclude Include="src\cipher.h" />
-    <ClInclude Include="src\skeymgmt.h" />
     <ClInclude Include="src\sig\internal.h">
       <Filter>sig</Filter>
     </ClInclude>
@@ -102,6 +119,15 @@
     </ClInclude>
     <ClInclude Include="src\obj\object.h">
       <Filter>obj</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kmgmt\keymgmt.h">
+      <Filter>kmgmt</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kmgmt\internal.h">
+      <Filter>kmgmt</Filter>
+    </ClInclude>
+    <ClInclude Include="src\kmgmt\skey.h">
+      <Filter>kmgmt</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -116,6 +142,9 @@
     </Filter>
     <Filter Include="obj">
       <UniqueIdentifier>{979df036-34cf-4c7c-9913-2fac5a8a278d}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="kmgmt">
+      <UniqueIdentifier>{d486011a-d22c-47f2-ad6a-595cb0199019}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
