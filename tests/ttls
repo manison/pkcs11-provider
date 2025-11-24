@@ -9,6 +9,19 @@ if [[ "$NSS_FIPS" = "1" ]] && [[ "$TOKENTYPE" = "softokn" ]]; then
     exit 77;
 fi
 
+TEST_ML_DSA=0
+if [ "${SUPPORT_ML_DSA}" -eq 1 ]; then
+    if [[ "$TOKENTYPE" = "kryoptic" ]]; then
+        OSSLMAJ=$(get_openssl_major)
+        OSSLMIN=$(get_openssl_minor)
+        if [[ $OSSLMAJ -gt 3 || ( $OSSLMAJ -eq 3 && $OSSLMIN -gt 5 ) ]]; then
+            TEST_ML_DSA=1
+        fi
+    else
+        TEST_ML_DSA=1
+    fi
+fi
+
 title PARA "Test SSL_CTX creation"
 $CHECKER "${TESTBLDDIR}/tlsctx"
 
@@ -36,6 +49,15 @@ wait_for_server_at_exit() {
 }
 trap 'wait_for_server_at_exit $SERVER_PID;' EXIT
 
+OSSL_GROUPS='secp256r1:secp521r1:secp384r1:ffdhe2048:ffdhe3072:ffdhe4096:ffdhe6144:ffdhe8192'
+if [ "${NO_ECX_IN_TLS:-0}" -ne 1 ]; then
+    if [ "${SUPPORT_X448:-0}" -eq 1 ]; then
+        OSSL_GROUPS='?x448_mlkem1024:?x448:'${OSSL_GROUPS}
+    fi
+    if [ "${SUPPORT_X25519:-0}" -eq 1 ]; then
+        OSSL_GROUPS='?x25519_mlkem768:?x25519:'${OSSL_GROUPS}
+    fi
+fi
 PORT=23456
 
 run_test() {
@@ -45,7 +67,7 @@ run_test() {
     CLNT_ARGS=$4
 
     export PKCS11_PROVIDER_DEBUG="file:${TMPPDIR}/p11prov-debug-tls-server.log"
-    expect -c "spawn $CHECKER $OPENSSL s_server $PROPQ -accept \"${PORT}\" -naccept 1 -key \"${KEY}\" -cert \"${CERT}\" $SRV_ARGS;
+    expect -c "spawn $CHECKER $OPENSSL s_server $PROPQ -accept \"${PORT}\" -groups \"${OSSL_GROUPS}\" -naccept 1 -key \"${KEY}\" -cert \"${CERT}\" $SRV_ARGS;
         set timeout 10;
         expect {
             \"ACCEPT\" {};
@@ -83,7 +105,7 @@ run_test() {
     read -r < "${TMPPDIR}/s_server_ready"
 
     export PKCS11_PROVIDER_DEBUG="file:${TMPPDIR}/p11prov-debug-tls-client.log"
-    expect -c "spawn $CHECKER $OPENSSL s_client $PROPQ -connect \"localhost:${PORT}\" -CAfile \"${CACRT}\" $CLNT_ARGS;
+    expect -c "spawn $CHECKER $OPENSSL s_client $PROPQ -groups \"${OSSL_GROUPS}\" -connect \"localhost:${PORT}\" -CAfile \"${CACRT}\" $CLNT_ARGS;
         set timeout 10;
         expect {
             \" TLS SUCCESSFUL \" {};
@@ -132,7 +154,7 @@ run_tests() {
         run_test "$ED2PRIURI" "$ED2CRTURI"
     fi
 
-    if [[ -n "$MLDSABASEURI" ]]; then
+    if [ "$TEST_ML_DSA" -eq 1 ]; then
         title PARA "Run sanity test with default values (ML-DSA)"
         run_test "$MLDSAPRIURI" "$MLDSACRTURI"
     fi

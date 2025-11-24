@@ -390,6 +390,18 @@ static int p11prov_store_load(void *pctx, OSSL_CALLBACK *object_cb,
                 return RET_OSSL_ERR;
             }
             break;
+        case CKK_EC_MONTGOMERY:
+            switch (p11prov_obj_get_key_bit_size(obj)) {
+            case X448_BIT_SIZE:
+                data_type = (char *)X448_NAME;
+                break;
+            case X25519_BIT_SIZE:
+                data_type = (char *)X25519_NAME;
+                break;
+            default:
+                return RET_OSSL_ERR;
+            }
+            break;
         case CKK_ML_DSA:
             switch (p11prov_obj_get_key_param_set(obj)) {
             case CKP_ML_DSA_44:
@@ -507,6 +519,7 @@ static int p11prov_store_export_object(void *loaderctx, const void *reference,
 {
     P11PROV_CTX *ctx = NULL;
     P11PROV_OBJ *obj = NULL;
+    CK_OBJECT_CLASS class;
 
     P11PROV_debug("store (%p) export object %p, %zu", loaderctx, reference,
                   reference_sz);
@@ -525,8 +538,12 @@ static int p11prov_store_export_object(void *loaderctx, const void *reference,
     }
 
     /* we can only export public bits, so that's all we do */
-    return p11prov_obj_export_public_key(obj, CK_UNAVAILABLE_INFORMATION, false,
-                                         false, cb_fn, cb_arg);
+    class = p11prov_obj_get_class(obj);
+    if (class != CKO_PUBLIC_KEY) {
+        return RET_OSSL_ERR;
+    }
+
+    return p11prov_obj_export_public_key(obj, cb_fn, cb_arg);
 }
 
 static const OSSL_PARAM *p11prov_store_settable_ctx_params(void *provctx)

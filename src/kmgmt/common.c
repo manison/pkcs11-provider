@@ -360,9 +360,8 @@ void *p11prov_kmgmt_new(void *provctx, CK_KEY_TYPE type)
         return NULL;
     }
 
-    key =
-        p11prov_obj_new(provctx, CK_UNAVAILABLE_INFORMATION,
-                        CK_P11PROV_IMPORTED_HANDLE, CK_UNAVAILABLE_INFORMATION);
+    key = p11prov_obj_new(provctx, CK_UNAVAILABLE_INFORMATION,
+                          CK_P11PROV_IMPORTED_HANDLE, CKO_P11PROV_NEW_KEY);
     if (key) {
         p11prov_obj_set_key_type(key, type);
     }
@@ -477,12 +476,9 @@ int p11prov_kmgmt_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
     CK_OBJECT_CLASS class = p11prov_obj_get_class(key);
-    CK_KEY_TYPE type = p11prov_obj_get_key_type(key);
-    bool params_only = false;
 
-    P11PROV_debug("key %p export (type: %ld, selection: %d)", key, type,
-                  selection);
-
+    P11PROV_debug("key %p export (type: %ld, selection: %d)", key,
+                  p11prov_obj_get_key_type(key), selection);
     if (!key) {
         return RET_OSSL_ERR;
     }
@@ -497,16 +493,14 @@ int p11prov_kmgmt_export(void *keydata, int selection, OSSL_CALLBACK *cb_fn,
         return RET_OSSL_ERR;
     }
 
-    if (selection & OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS) {
-        if (!(selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY)) {
-            params_only = true;
-        }
-        if (type != CKK_EC && params_only) {
-            /* Domain parameters allowed only with CKK_EC */
-            return RET_OSSL_ERR;
-        }
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        return p11prov_obj_export_public_key(key, cb_fn, cb_arg);
     }
 
-    return p11prov_obj_export_public_key(key, type, true, params_only, cb_fn,
-                                         cb_arg);
+    if (selection & OSSL_KEYMGMT_SELECT_DOMAIN_PARAMETERS) {
+        return p11prov_obj_export_params(key, cb_fn, cb_arg);
+    }
+
+    /* nothing to export, just return OK */
+    return RET_OSSL_OK;
 }

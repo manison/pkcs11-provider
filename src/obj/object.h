@@ -9,6 +9,10 @@
 
 /* Special value for "imported key handle" */
 #define CK_P11PROV_IMPORTED_HANDLE (CK_UNAVAILABLE_INFORMATION - 1)
+/* Special value for "new key" */
+#define CKO_P11PROV_NEW_KEY CKA_P11PROV_BASE + 1
+/* Special value for public key created from a private one */
+#define CKO_P11PROV_PUB_FROM_PRIV_KEY CKA_P11PROV_BASE + 2
 
 /* Objects */
 CK_RV p11prov_obj_pool_init(P11PROV_CTX *ctx, CK_SLOT_ID id,
@@ -47,6 +51,8 @@ P11PROV_URI *p11prov_obj_get_refresh_uri(P11PROV_OBJ *obj);
 void p11prov_obj_set_class(P11PROV_OBJ *obj, CK_OBJECT_CLASS class);
 void p11prov_obj_set_key_type(P11PROV_OBJ *obj, CK_KEY_TYPE type);
 void p11prov_obj_set_key_params(P11PROV_OBJ *obj, CK_ULONG param_set);
+void p11prov_obj_set_key_bits(P11PROV_OBJ *obj, CK_ULONG key_bit_size,
+                              CK_ULONG key_size);
 
 typedef CK_RV (*store_obj_callback)(void *, P11PROV_OBJ *);
 CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
@@ -63,15 +69,18 @@ CK_RV p11prov_derive_key(P11PROV_OBJ *key, CK_MECHANISM *mechanism,
                          P11PROV_SESSION **_session, CK_OBJECT_HANDLE *dkey);
 const char *p11prov_obj_get_ec_group_name(P11PROV_OBJ *obj);
 bool p11prov_obj_get_ec_compressed(P11PROV_OBJ *obj);
-int p11prov_obj_export_public_key(P11PROV_OBJ *obj, CK_KEY_TYPE key_type,
-                                  bool search_related, bool params_only,
-                                  OSSL_CALLBACK *cb_fn, void *cb_arg);
+int p11prov_obj_export_public_key(P11PROV_OBJ *obj, OSSL_CALLBACK *cb_fn,
+                                  void *cb_arg);
+int p11prov_obj_export_params(P11PROV_OBJ *obj, OSSL_CALLBACK *cb_fn,
+                              void *cb_arg);
 int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
                                   CK_ATTRIBUTE **pub_y);
 int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub);
+int p11prov_obj_get_ecx_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub);
 CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key);
 P11PROV_OBJ *mock_pub_ec_key(P11PROV_CTX *ctx, CK_ATTRIBUTE_TYPE type,
                              CK_ATTRIBUTE *ec_params);
+P11PROV_OBJ *p11prov_obj_new_pub_from_priv(P11PROV_OBJ *priv);
 bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj);
 
 #define OBJ_CMP_KEY_TYPE 0x00
@@ -89,7 +98,10 @@ P11PROV_OBJ *p11prov_obj_import_secret_key(P11PROV_CTX *ctx, CK_KEY_TYPE type,
 CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
                                             const void *pubkey,
                                             size_t pubkey_len);
+CK_RV p11prov_pkeyinfo_to_pubkey(CK_ATTRIBUTE *pkeyinfo, CK_ATTRIBUTE *attr);
 
+CK_RV p11prov_obj_copy_key_data(P11PROV_OBJ *dst, P11PROV_OBJ *src);
+P11PROV_OBJ *p11prov_obj_pub_from_priv(P11PROV_OBJ *priv);
 P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
                                          CK_OBJECT_CLASS class);
 
@@ -98,20 +110,28 @@ P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
 #define ED25519_BYTE_SIZE ED25519_BIT_SIZE / 8
 #define ED25519_SEC_BITS 128
 #define ED25519_SIG_SIZE 64
-#define ED25519_EC_PARAMS \
-    0x13, 0x0c, 0x65, 0x64, 0x77, 0x61, 0x72, 0x64, 0x73, 0x32, 0x35, 0x35, \
-        0x31, 0x39
-#define ED25519_EC_PARAMS_LEN 14
 #define ED448 "ED448"
 #define ED448_BIT_SIZE 456
 #define ED448_BYTE_SIZE ED448_BIT_SIZE / 8
 #define ED448_SEC_BITS 224
 #define ED448_SIG_SIZE 114
-#define ED448_EC_PARAMS \
-    0x13, 0x0a, 0x65, 0x64, 0x77, 0x61, 0x72, 0x64, 0x73, 0x34, 0x34, 0x38
-#define ED448_EC_PARAMS_LEN 12
-extern const CK_BYTE ed25519_ec_params[];
-extern const CK_BYTE ed448_ec_params[];
+
+#define X25519_NAME "X25519"
+#define X25519_BIT_SIZE 256
+#define X25519_BYTE_SIZE X25519_BIT_SIZE / 8
+#define X25519_SEC_BITS 128
+#define X25519_MAX_SIZE 32
+#define X448_NAME "X448"
+#define X448_BIT_SIZE 448
+#define X448_BYTE_SIZE X448_BIT_SIZE / 8
+#define X448_SEC_BITS 224
+#define X448_MAX_SIZE 56
+
+#define ECX_OID_LEN 5
+extern const CK_BYTE x25519_oid[ECX_OID_LEN];
+extern const CK_BYTE x448_oid[ECX_OID_LEN];
+extern const CK_BYTE ed25519_oid[ECX_OID_LEN];
+extern const CK_BYTE ed448_oid[ECX_OID_LEN];
 
 #define MLDSA_44 "ML-DSA-44"
 #define MLDSA_65 "ML-DSA-65"

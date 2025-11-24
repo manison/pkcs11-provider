@@ -126,6 +126,30 @@ int p11prov_obj_get_ed_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub)
     return RET_OSSL_OK;
 }
 
+int p11prov_obj_get_ecx_pub_key(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub)
+{
+    CK_ATTRIBUTE *a;
+    int ret;
+
+    P11PROV_debug("get montgomery pubkey %p", obj);
+
+    ret = prep_get_pub_key(&obj, CKK_EC_MONTGOMERY);
+    if (ret != RET_OSSL_OK) {
+        return ret;
+    }
+
+    /* See if we have cached attributes first */
+    a = p11prov_obj_get_attr(obj, CKA_P11PROV_PUB_KEY);
+    if (!a) {
+        return RET_OSSL_ERR;
+    }
+
+    if (pub) {
+        *pub = a;
+    }
+    return RET_OSSL_OK;
+}
+
 int p11prov_obj_get_ec_public_x_y(P11PROV_OBJ *obj, CK_ATTRIBUTE **pub_x,
                                   CK_ATTRIBUTE **pub_y)
 {
@@ -266,13 +290,19 @@ done:
     return ret;
 }
 
-CK_RV decode_ec_point(CK_KEY_TYPE key_type, CK_ATTRIBUTE *attr,
-                      struct data_buffer *ec_point)
+CK_RV decode_ec_point(P11PROV_CTX *provctx, CK_KEY_TYPE key_type,
+                      CK_ATTRIBUTE *attr, struct data_buffer *ec_point)
 {
     ASN1_OCTET_STRING *octet;
     const unsigned char *val;
     CK_RV ret = CKR_GENERAL_ERROR;
     int err;
+
+    /* Some of the ASN.1 operation may leave errors on the stack
+     * which cause TLS operation to fail even if they are benign
+     * by just being there, so we need to be able to pop the
+     * stack if we want to ignore an error */
+    p11prov_set_error_mark(provctx);
 
     /* in d2i functions 'in' is overwritten to return the remainder of
      * the buffer after parsing, so we always need to avoid passing in
@@ -285,11 +315,13 @@ CK_RV decode_ec_point(CK_KEY_TYPE key_type, CK_ATTRIBUTE *attr,
          * Montgomery curves so do not fail in that case and just take
          * the value as is */
         if (key_type == CKK_EC) {
-            return CKR_KEY_INDIGESTIBLE;
+            ret = CKR_KEY_INDIGESTIBLE;
+            goto done;
         } else {
             octet = ASN1_OCTET_STRING_new();
             if (!octet) {
-                return CKR_HOST_MEMORY;
+                ret = CKR_HOST_MEMORY;
+                goto done;
             }
             /* makes a copy of the value */
             err = ASN1_OCTET_STRING_set(octet, attr->pValue, attr->ulValueLen);
@@ -309,7 +341,16 @@ CK_RV decode_ec_point(CK_KEY_TYPE key_type, CK_ATTRIBUTE *attr,
 
     ret = CKR_OK;
 done:
-    ASN1_OCTET_STRING_free(octet);
+    if (ret == CKR_OK) {
+        /* we want to ignore decoding errors in this case */
+        p11prov_pop_error_to_mark(provctx);
+    } else {
+        /* we want to leave errors in this case */
+        p11prov_clear_last_error_mark(provctx);
+    }
+    if (octet) {
+        ASN1_OCTET_STRING_free(octet);
+    }
     return ret;
 }
 
@@ -333,7 +374,8 @@ CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key)
             void *tmp_ptr;
             CK_RV ret;
 
-            ret = decode_ec_point(key->data.key.type, ec_point, &data);
+            ret =
+                decode_ec_point(key->ctx, key->data.key.type, ec_point, &data);
             if (ret != CKR_OK) {
                 P11PROV_raise(key->ctx, ret, "Failed to decode EC_POINT");
                 return NULL;
@@ -390,7 +432,6 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
 
     switch (key->data.key.type) {
     case CKK_EC:
-    case CKK_EC_EDWARDS:
         /* if class is still "domain parameters" convert it to
          * a public key */
         if (key->class == CKO_DOMAIN_PARAMETERS) {
@@ -401,6 +442,8 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
                           "Invalid Key type, not a public key");
             return CKR_KEY_INDIGESTIBLE;
         }
+        break;
+    case CKK_EC_MONTGOMERY:
         break;
     default:
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
@@ -540,6 +583,7 @@ static int cmp_public_key_values(P11PROV_OBJ *pub_key1, P11PROV_OBJ *pub_key2)
         break;
     case CKK_EC:
     case CKK_EC_EDWARDS:
+    case CKK_EC_MONTGOMERY:
         ret = cmp_attr(pub_key1, pub_key2, CKA_P11PROV_PUB_KEY);
         break;
     case CKK_ML_DSA:
@@ -679,31 +723,6 @@ done:
     return ret;
 }
 
-static int p11prov_obj_get_ed_nid(CK_ATTRIBUTE *ecp)
-{
-    const unsigned char *val = ecp->pValue;
-    ASN1_OBJECT *obj = d2i_ASN1_OBJECT(NULL, &val, ecp->ulValueLen);
-    if (obj) {
-        int nid = OBJ_obj2nid(obj);
-        ASN1_OBJECT_free(obj);
-        if (nid != NID_undef) {
-            return nid;
-        }
-    }
-
-    /* it might be the parameters are encoded printable string
-     * for EdDSA which OpenSSL does not understand */
-    if (ecp->ulValueLen == ED25519_EC_PARAMS_LEN
-        && memcmp(ecp->pValue, ed25519_ec_params, ED25519_EC_PARAMS_LEN) == 0) {
-        return NID_ED25519;
-    } else if (ecp->ulValueLen == ED448_EC_PARAMS_LEN
-               && memcmp(ecp->pValue, ed448_ec_params, ED448_EC_PARAMS_LEN)
-                      == 0) {
-        return NID_ED448;
-    }
-    return NID_undef;
-}
-
 int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
                         int cmp_type)
 {
@@ -810,12 +829,14 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
         break;
 
     case CKK_EC_EDWARDS:
-        /* The EdDSA params can be encoded as printable string, which is
-         * not recognized by OpenSSL and does not have respective EC_GROUP */
+    case CKK_EC_MONTGOMERY:
+        /* The Edwards/Montgomery params can be encoded as printable string,
+         * which is not recognized by OpenSSL and does not have an EC_GROUP */
         ret = cmp_attr(key1, key2, CKA_EC_PARAMS);
         if (ret != RET_OSSL_OK) {
             /* If EC_PARAMS do not match it may be due to encoding. */
             CK_ATTRIBUTE *ec_p;
+            CK_RV rv;
             int nid1;
             int nid2;
 
@@ -823,8 +844,9 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
             if (!ec_p) {
                 return RET_OSSL_ERR;
             }
-            nid1 = p11prov_obj_get_ed_nid(ec_p);
-            if (nid1 == NID_undef) {
+            rv = p11prov_match_curve(key1->data.key.type, ec_p, NULL, &nid1,
+                                     NULL, NULL);
+            if (rv != CKR_OK) {
                 return RET_OSSL_ERR;
             }
 
@@ -832,8 +854,9 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
             if (!ec_p) {
                 return RET_OSSL_ERR;
             }
-            nid2 = p11prov_obj_get_ed_nid(ec_p);
-            if (nid2 == NID_undef) {
+            rv = p11prov_match_curve(key2->data.key.type, ec_p, NULL, &nid2,
+                                     NULL, NULL);
+            if (rv != CKR_OK) {
                 return RET_OSSL_ERR;
             }
             if (nid1 != nid2) {
@@ -873,4 +896,149 @@ int p11prov_obj_key_cmp(P11PROV_OBJ *key1, P11PROV_OBJ *key2, CK_KEY_TYPE type,
 
     /* if nothing fails it is a match */
     return RET_OSSL_OK;
+}
+
+/* curveName params */
+#define ED25519_EC_PARAMS \
+    0x13, 0x0c, 0x65, 0x64, 0x77, 0x61, 0x72, 0x64, 0x73, 0x32, 0x35, 0x35, \
+        0x31, 0x39
+#define ED448_EC_PARAMS \
+    0x13, 0x0a, 0x65, 0x64, 0x77, 0x61, 0x72, 0x64, 0x73, 0x34, 0x34, 0x38
+#define X25519_EC_PARAMS \
+    0x13, 0x0a, 0x63, 0x75, 0x72, 0x76, 0x65, 0x32, 0x35, 0x35, 0x31, 0x39
+#define X448_EC_PARAMS \
+    0x13, 0x08, 0x63, 0x75, 0x72, 0x76, 0x65, 0x34, 0x34, 0x38
+const CK_BYTE ed25519_ec_params[] = { ED25519_EC_PARAMS };
+const CK_BYTE ed448_ec_params[] = { ED448_EC_PARAMS };
+const CK_BYTE x25519_ec_params[] = { X25519_EC_PARAMS };
+const CK_BYTE x448_ec_params[] = { X448_EC_PARAMS };
+
+/* OID params */
+#define X25519_OID 0x06, 0x03, 0x2B, 0x65, 0x6E
+#define X448_OID 0x06, 0x03, 0x2B, 0x65, 0x6F
+#define ED25519_OID 0x06, 0x03, 0x2B, 0x65, 0x70
+#define ED448_OID 0x06, 0x03, 0x2B, 0x65, 0x71
+const CK_BYTE x25519_oid[] = { X25519_OID };
+const CK_BYTE x448_oid[] = { X448_OID };
+const CK_BYTE ed25519_oid[] = { ED25519_OID };
+const CK_BYTE ed448_oid[] = { ED448_OID };
+
+struct match_curve {
+    const CK_BYTE *params;
+    CK_ULONG params_len;
+    const char *curve_name;
+    int curve_nid;
+    CK_ULONG key_bit_size;
+    CK_ULONG key_size;
+};
+
+struct match_curve ed_params_table[] = {
+    { ed25519_oid, sizeof(ed25519_oid), ED25519, NID_ED25519, ED25519_BIT_SIZE,
+      ED25519_BYTE_SIZE },
+    { ed448_oid, sizeof(ed448_oid), ED448, NID_ED448, ED448_BIT_SIZE,
+      ED448_BYTE_SIZE },
+    { ed25519_ec_params, sizeof(ed25519_ec_params), ED25519, NID_ED25519,
+      ED25519_BIT_SIZE, ED25519_BYTE_SIZE },
+    { ed448_ec_params, sizeof(ed448_ec_params), ED448, NID_ED448,
+      ED448_BIT_SIZE, ED448_BYTE_SIZE },
+};
+
+struct match_curve x_params_table[] = {
+    { x25519_oid, sizeof(x25519_oid), X25519_NAME, NID_X25519, X25519_BIT_SIZE,
+      X25519_BYTE_SIZE },
+    { x448_oid, sizeof(x448_oid), X448_NAME, NID_X448, X448_BIT_SIZE,
+      X448_BYTE_SIZE },
+    { x25519_ec_params, sizeof(x25519_ec_params), X25519_NAME, NID_X25519,
+      X25519_BIT_SIZE, X25519_BYTE_SIZE },
+    { x448_ec_params, sizeof(x448_ec_params), X448_NAME, NID_X448,
+      X448_BIT_SIZE, X448_BYTE_SIZE },
+};
+
+CK_RV p11prov_match_curve(CK_KEY_TYPE type, CK_ATTRIBUTE *attr,
+                          const char **curve_name, int *curve_nid,
+                          CK_ULONG *key_bit_size, CK_ULONG *key_size)
+{
+    CK_RV rv = CKR_KEY_INDIGESTIBLE;
+    struct match_curve *table = NULL;
+    int table_size = 0;
+
+    if (type == CKK_EC_EDWARDS) {
+        table = ed_params_table;
+        table_size = sizeof(ed_params_table) / sizeof(struct match_curve);
+    } else if (type == CKK_EC_MONTGOMERY) {
+        table = x_params_table;
+        table_size = sizeof(x_params_table) / sizeof(struct match_curve);
+    }
+    for (int i = 0; i < table_size; i++) {
+        if (attr->ulValueLen == table[i].params_len
+            && memcmp(attr->pValue, table[i].params, attr->ulValueLen) == 0) {
+            if (curve_name) {
+                *curve_name = table[i].curve_name;
+            }
+            if (curve_nid) {
+                *curve_nid = table[i].curve_nid;
+            }
+            if (key_bit_size) {
+                *key_bit_size = table[i].key_bit_size;
+            }
+            if (key_size) {
+                *key_size = table[i].key_size;
+            }
+            rv = CKR_OK;
+            break;
+        }
+    }
+    return rv;
+}
+
+/* This function attempts to return a public key from a private one.
+ *
+ * If a public key is already associated then it is immediately returned.
+ *
+ * Otherwise we create a mock object with a synthetic public key if
+ * enough data is available (CKA_PUBLIC_KEY_INFO). This will then defer
+ * searching for a key on the token only to a later time when
+ * it is actually needed, or to generate a temporary session key
+ * like we do for imported ephemeral keys.
+ *
+ * Finally if not enough public info is available we immediately try
+ * a search so proper errors are returned to callers, instead of
+ * deferring key issues to a later operation */
+P11PROV_OBJ *p11prov_obj_pub_from_priv(P11PROV_OBJ *priv)
+{
+    CK_ATTRIBUTE *pkeyinfo = NULL;
+    P11PROV_OBJ *key;
+
+    if (priv->class != CKO_PRIVATE_KEY) {
+        return NULL;
+    }
+
+    if (priv->assoc_obj
+        && (priv->assoc_obj->class == CKO_PUBLIC_KEY
+            || priv->assoc_obj->class == CKO_P11PROV_PUB_FROM_PRIV_KEY)) {
+        return priv->assoc_obj;
+    }
+
+    /* If we do not have enough data for a synthetic key return an
+     * immediate search for the object */
+    pkeyinfo = p11prov_obj_get_attr(priv, CKA_PUBLIC_KEY_INFO);
+    if (!pkeyinfo) {
+        return p11prov_obj_find_associated(priv, CKO_PUBLIC_KEY);
+    }
+
+    /* we assume that if a public key exist, it will later be found in the
+     * same slot as the private key */
+    key = p11prov_obj_new(priv->ctx, priv->slotid, CK_P11PROV_IMPORTED_HANDLE,
+                          CKO_P11PROV_PUB_FROM_PRIV_KEY);
+    if (!key) {
+        return NULL;
+    }
+
+    key->data.key = priv->data.key;
+
+    /* make sure key is associated to the private one */
+    p11prov_obj_set_associated(priv, key);
+    p11prov_obj_set_associated(key, priv);
+
+    return key;
 }
