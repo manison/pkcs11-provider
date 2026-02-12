@@ -332,12 +332,14 @@ CK_RV decode_ec_point(P11PROV_CTX *provctx, CK_KEY_TYPE key_type,
         }
     }
 
-    ec_point->data = octet->data;
-    ec_point->length = octet->length;
-
-    /* moved octet data, do not free it */
-    octet->data = NULL;
-    octet->length = 0;
+    ec_point->data =
+        OPENSSL_memdup(ASN1_STRING_get0_data(octet), ASN1_STRING_length(octet));
+    if (!ec_point->data) {
+        ret = CKR_HOST_MEMORY;
+        ec_point->length = 0;
+        goto done;
+    }
+    ec_point->length = ASN1_STRING_length(octet);
 
     ret = CKR_OK;
 done:
@@ -410,11 +412,11 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
                                             const void *pubkey,
                                             size_t pubkey_len)
 {
-    CK_RV rv;
+    CK_RV rv = CKR_GENERAL_ERROR;
     CK_ATTRIBUTE *pub;
     CK_ATTRIBUTE *ecpoint;
     CK_ATTRIBUTE new_pub;
-    ASN1_OCTET_STRING oct;
+    ASN1_OCTET_STRING *oct = NULL;
     unsigned char *der = NULL;
     int add_attrs = 0;
     int len;
@@ -427,7 +429,8 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
         /* not matching, error out */
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                       "Cannot change public key of a token object");
-        return CKR_KEY_INDIGESTIBLE;
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
     }
 
     switch (key->data.key.type) {
@@ -440,7 +443,8 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
             /* check that this is a public key */
             P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                           "Invalid Key type, not a public key");
-            return CKR_KEY_INDIGESTIBLE;
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
         }
         break;
     case CKK_EC_MONTGOMERY:
@@ -448,7 +452,8 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
     default:
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                       "Invalid Key type, not an EC/ED key");
-        return CKR_KEY_INDIGESTIBLE;
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
     }
 
     pub = p11prov_obj_get_attr(key, CKA_P11PROV_PUB_KEY);
@@ -467,7 +472,8 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
         if (!ptr) {
             P11PROV_raise(key->ctx, CKR_HOST_MEMORY,
                           "Failed to store key public key");
-            return CKR_HOST_MEMORY;
+            rv = CKR_HOST_MEMORY;
+            goto done;
         }
         key->attrs = ptr;
     }
@@ -495,24 +501,37 @@ CK_RV p11prov_obj_set_ec_encoded_public_key(P11PROV_OBJ *key,
     new_pub.ulValueLen = (CK_ULONG)pubkey_len;
     rv = p11prov_copy_attr(pub, &new_pub);
     if (rv != CKR_OK) {
-        return rv;
+        goto done;
     }
 
-    oct.data = (unsigned char *)pubkey;
-    oct.length = (int)pubkey_len;
-    oct.flags = 0;
-
-    len = i2d_ASN1_OCTET_STRING(&oct, &der);
+    oct = ASN1_OCTET_STRING_new();
+    if (!oct) {
+        rv = CKR_HOST_MEMORY;
+        goto done;
+    }
+    if (!ASN1_STRING_set(oct, pubkey, pubkey_len)) {
+        rv = CKR_HOST_MEMORY;
+        goto done;
+    }
+    len = i2d_ASN1_OCTET_STRING(oct, &der);
     if (len < 0) {
         P11PROV_raise(key->ctx, CKR_KEY_INDIGESTIBLE,
                       "Failure to encode EC point to DER");
-        return CKR_KEY_INDIGESTIBLE;
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
     }
     ecpoint->type = CKA_EC_POINT;
     ecpoint->pValue = der;
+    der = NULL;
     ecpoint->ulValueLen = len;
 
-    return CKR_OK;
+    rv = CKR_OK;
+
+done:
+    ASN1_OCTET_STRING_free(oct);
+    OPENSSL_free(der);
+
+    return rv;
 }
 
 static int cmp_bn_attr(P11PROV_OBJ *key1, P11PROV_OBJ *key2,
@@ -623,6 +642,14 @@ static int match_key_with_cert(P11PROV_OBJ *priv_key, P11PROV_OBJ *pub_key)
         attrs[0].type = CKA_P11PROV_PUB_KEY;
         num = 1;
         break;
+    case CKK_ML_DSA:
+        attrs[0].type = CKA_VALUE;
+        num = 1;
+        break;
+    default:
+        P11PROV_raise(priv_key->ctx, CKR_GENERAL_ERROR,
+                      "Unknown public key type");
+        return RET_OSSL_ERR;
     }
 
     ret = get_attrs_from_cert(cert, attrs, num);
@@ -633,36 +660,16 @@ static int match_key_with_cert(P11PROV_OBJ *priv_key, P11PROV_OBJ *pub_key)
         goto done;
     }
 
-    switch (pub_key->data.key.type) {
-    case CKK_RSA:
-        x = p11prov_obj_get_attr(pub_key, CKA_MODULUS);
-        if (!x || x->ulValueLen != attrs[0].ulValueLen
-            || memcmp(x->pValue, attrs[0].pValue, x->ulValueLen) != 0) {
+    for (int i = 0; i < num; i++) {
+        x = p11prov_obj_get_attr(pub_key, attrs[i].type);
+        if (!x || x->ulValueLen != attrs[i].ulValueLen
+            || memcmp(x->pValue, attrs[i].pValue, x->ulValueLen) != 0) {
             ret = RET_OSSL_ERR;
             goto done;
         }
-
-        x = p11prov_obj_get_attr(pub_key, CKA_PUBLIC_EXPONENT);
-        if (!x || x->ulValueLen != attrs[1].ulValueLen
-            || memcmp(x->pValue, attrs[1].pValue, x->ulValueLen) != 0) {
-            ret = RET_OSSL_ERR;
-            goto done;
-        }
-
-        ret = RET_OSSL_OK;
-        break;
-    case CKK_EC:
-    case CKK_EC_EDWARDS:
-        x = p11prov_obj_get_attr(pub_key, CKA_P11PROV_PUB_KEY);
-        if (!x || x->ulValueLen != attrs[0].ulValueLen
-            || memcmp(x->pValue, attrs[0].pValue, x->ulValueLen) != 0) {
-            ret = RET_OSSL_ERR;
-            goto done;
-        }
-
-        ret = RET_OSSL_OK;
-        break;
     }
+
+    ret = RET_OSSL_OK;
 
 done:
     for (int i = 0; i < num; i++) {

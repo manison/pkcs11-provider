@@ -1,4 +1,5 @@
 /* Copyright (C) 2022 Simo Sorce <simo@redhat.com>
+   Copyright 2025 NXP
    SPDX-License-Identifier: Apache-2.0 */
 
 #ifndef _PROVIDER_H
@@ -241,6 +242,15 @@
 #define P11PROV_DESCS_AES_192_CTS "AES-192 CTS PKCS11 Provider Implementation"
 #define P11PROV_NAMES_AES_128_CTS "AES-128-CBC-CTS"
 #define P11PROV_DESCS_AES_128_CTS "AES-128 CTS PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_256_GCM "AES-256-GCM"
+#define P11PROV_DESCS_AES_256_GCM "AES-256 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_192_GCM "AES-192-GCM"
+#define P11PROV_DESCS_AES_192_GCM "AES-192 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_128_GCM "AES-128-GCM"
+#define P11PROV_DESCS_AES_128_GCM "AES-128 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_CHACHA20_POLY1305 "ChaCha20-Poly1305"
+#define P11PROV_DESCS_CHACHA20_POLY1305 \
+    "CHACHA20-POLY1305 PKCS11 Provider Implementation"
 #define P11PROV_NAME_GENERIC_SECRET "GENERIC-SECRET"
 #define P11PROV_NAMES_GENERIC_SECRET P11PROV_NAME_GENERIC_SECRET
 #define P11PROV_DESCS_GENERIC_SECRET "PKCS11 Generic Secret Implementation"
@@ -270,7 +280,7 @@ typedef pthread_rwlock_t p11prov_rwlock_t;
 #define p11prov_rwlock_trywrlock(l) pthread_rwlock_trywrlock(l)
 #endif
 
-#if __SANITIZE_ADDRESS__
+#ifdef __SANITIZE_ADDRESS__
 #define P11PROV_ADDRESS_SANITIZER 1
 #endif
 #if defined(__has_feature)
