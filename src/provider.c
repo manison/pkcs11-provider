@@ -1,4 +1,5 @@
 /* Copyright (C) 2022 Simo Sorce <simo@redhat.com>
+   Copyright 2025 NXP
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
@@ -53,6 +54,7 @@ struct p11prov_ctx {
     OSSL_ALGORITHM *op_exchange;
     OSSL_ALGORITHM *op_signature;
     OSSL_ALGORITHM *op_asym_cipher;
+    OSSL_ALGORITHM *op_kem;
 
     OSSL_ALGORITHM *op_encoder;
     OSSL_ALGORITHM *op_decoder;
@@ -544,6 +546,7 @@ static void p11prov_ctx_free(P11PROV_CTX *ctx)
     OPENSSL_free(ctx->op_exchange);
     OPENSSL_free(ctx->op_signature);
     OPENSSL_free(ctx->op_asym_cipher);
+    OPENSSL_free(ctx->op_kem);
     OPENSSL_free(ctx->op_encoder);
     OPENSSL_free(ctx->op_decoder);
     OPENSSL_free(ctx->op_keymgmt);
@@ -855,12 +858,14 @@ static CK_RV alg_set_op(OSSL_ALGORITHM **op, int idx, OSSL_ALGORITHM *alg)
         CKM_ECDSA_SHA384, CKM_ECDSA_SHA512, CKM_ECDSA_SHA3_224, \
         CKM_ECDSA_SHA3_256, CKM_ECDSA_SHA3_384, CKM_ECDSA_SHA3_512
 
-#define PQC_MECHS CKM_ML_DSA, CKM_ML_DSA_KEY_PAIR_GEN
+#define PQC_MECHS \
+    CKM_ML_DSA, CKM_ML_DSA_KEY_PAIR_GEN, CKM_ML_KEM, CKM_ML_KEM_KEY_PAIR_GEN
 
 #if SKEY_SUPPORT == 1
 #define AES_MECHS \
     CKM_AES_ECB, CKM_AES_CBC, CKM_AES_CBC_PAD, CKM_AES_CTR, CKM_AES_CTS, \
-        CKM_AES_OFB, CKM_AES_CFB8, CKM_AES_CFB128, CKM_AES_CFB1
+        CKM_AES_OFB, CKM_AES_CFB8, CKM_AES_CFB128, CKM_AES_CFB1, CKM_AES_GCM, \
+        CKM_CHACHA20_POLY1305
 #endif
 
 static void alg_rm_mechs(CK_ULONG *checklist, CK_ULONG *rmlist, int *clsize,
@@ -909,9 +914,11 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                              RSAPSS_SIG_MECHS,
                              RSA_ENC_MECHS,
                              CKM_EC_KEY_PAIR_GEN,
+                             CKM_EC_EDWARDS_KEY_PAIR_GEN,
                              ECDSA_SIG_MECHS,
                              CKM_ECDH1_DERIVE,
                              CKM_ECDH1_COFACTOR_DERIVE,
+                             CKM_EC_MONTGOMERY_KEY_PAIR_GEN,
                              CKM_HKDF_DERIVE,
                              DIGEST_MECHS,
                              CKM_EDDSA,
@@ -930,6 +937,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
     int exchange_idx = 0;
     int signature_idx = 0;
     int asym_cipher_idx = 0;
+    int kem_idx = 0;
 #if SKEY_SUPPORT == 1
     int cipher_idx = 0;
 #endif
@@ -1198,6 +1206,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 UNCHECK_MECHS(CKM_SHA3_512);
                 break;
             case CKM_EDDSA:
+            case CKM_EC_EDWARDS_KEY_PAIR_GEN:
                 ADD_ALGO_EXT(ED25519, signature, prop,
                              p11prov_ed25519_signature_functions);
                 ADD_ALGO_EXT(ED448, signature, prop,
@@ -1212,6 +1221,10 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                              p11prov_ed448ph_signature_functions);
 #endif
                 break;
+            case CKM_EC_MONTGOMERY_KEY_PAIR_GEN:
+                ADD_ALGO(X25519, x25519, exchange, prop);
+                ADD_ALGO(X448, x448, exchange, prop);
+                break;
             case CKM_ML_DSA:
             case CKM_ML_DSA_KEY_PAIR_GEN:
                 ADD_ALGO_EXT(ML_DSA_44, signature, prop,
@@ -1221,6 +1234,16 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 ADD_ALGO_EXT(ML_DSA_87, signature, prop,
                              p11prov_mldsa_87_signature_functions);
                 UNCHECK_MECHS(CKM_ML_DSA_KEY_PAIR_GEN, CKM_ML_DSA);
+                break;
+            case CKM_ML_KEM:
+            case CKM_ML_KEM_KEY_PAIR_GEN:
+                ADD_ALGO_EXT(ML_KEM_512, kem, prop,
+                             p11prov_mlkem_kem_functions);
+                ADD_ALGO_EXT(ML_KEM_768, kem, prop,
+                             p11prov_mlkem_kem_functions);
+                ADD_ALGO_EXT(ML_KEM_1024, kem, prop,
+                             p11prov_mlkem_kem_functions);
+                UNCHECK_MECHS(CKM_ML_KEM_KEY_PAIR_GEN, CKM_ML_KEM);
                 break;
 #if SKEY_SUPPORT == 1
             case CKM_AES_ECB:
@@ -1273,6 +1296,16 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
                 ADD_ALGO(AES_128_CTS, aes128cts, cipher, prop);
                 UNCHECK_MECHS(CKM_AES_CTS);
                 break;
+            case CKM_AES_GCM:
+                ADD_ALGO(AES_256_GCM, aes256gcm, cipher, prop);
+                ADD_ALGO(AES_192_GCM, aes192gcm, cipher, prop);
+                ADD_ALGO(AES_128_GCM, aes128gcm, cipher, prop);
+                UNCHECK_MECHS(CKM_AES_GCM);
+                break;
+            case CKM_CHACHA20_POLY1305:
+                ADD_ALGO(CHACHA20_POLY1305, chacha20256poly1305, cipher, prop);
+                UNCHECK_MECHS(CKM_CHACHA20_POLY1305);
+                break;
 #endif
             default:
                 P11PROV_raise(ctx, CKR_GENERAL_ERROR, "Unhandled mechanism %lu",
@@ -1299,6 +1332,7 @@ static CK_RV operations_init(P11PROV_CTX *ctx)
     TERM_ALGO(exchange);
     TERM_ALGO(signature);
     TERM_ALGO(asym_cipher);
+    TERM_ALGO(kem);
 #if SKEY_SUPPORT == 1
     TERM_ALGO(cipher);
 #endif
@@ -1368,6 +1402,10 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
                  p11prov_ec_edwards_encoder_text_functions);
     ADD_ALGO_EXT(ED448, encoder, DEFAULT_PROPERTY(",output=text"),
                  p11prov_ec_edwards_encoder_text_functions);
+    ADD_ALGO_EXT(X25519, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_ec_montgomery_encoder_text_functions);
+    ADD_ALGO_EXT(X448, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_ec_montgomery_encoder_text_functions);
     ADD_ALGO_EXT(ML_DSA_44, encoder, DEFAULT_PROPERTY(",output=text"),
                  p11prov_mldsa_encoder_text_functions);
     ADD_ALGO_EXT(ML_DSA_44, encoder,
@@ -1383,6 +1421,21 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
     ADD_ALGO_EXT(ML_DSA_87, encoder,
                  DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
                  p11prov_mldsa_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ML_KEM_512, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mlkem_encoder_text_functions);
+    ADD_ALGO_EXT(ML_KEM_512, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mlkem_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ML_KEM_768, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mlkem_encoder_text_functions);
+    ADD_ALGO_EXT(ML_KEM_768, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mlkem_encoder_spki_der_functions);
+    ADD_ALGO_EXT(ML_KEM_1024, encoder, DEFAULT_PROPERTY(",output=text"),
+                 p11prov_mlkem_encoder_text_functions);
+    ADD_ALGO_EXT(ML_KEM_1024, encoder,
+                 DEFAULT_PROPERTY(",output=der,structure=SubjectPublicKeyInfo"),
+                 p11prov_mlkem_encoder_spki_der_functions);
     if (ctx->encode_pkey_as_pk11_uri) {
         ADD_ALGO_EXT(RSA, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
@@ -1399,6 +1452,12 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
         ADD_ALGO_EXT(ED448, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
                      p11prov_ec_edwards_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(X25519, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_ec_montgomery_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(X448, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_ec_montgomery_encoder_priv_key_info_pem_functions);
         ADD_ALGO_EXT(ML_DSA_44, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
                      p11prov_mldsa_encoder_priv_key_info_pem_functions);
@@ -1408,6 +1467,15 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
         ADD_ALGO_EXT(ML_DSA_87, encoder,
                      DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
                      p11prov_mldsa_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_KEM_512, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mlkem_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_KEM_768, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mlkem_encoder_priv_key_info_pem_functions);
+        ADD_ALGO_EXT(ML_KEM_1024, encoder,
+                     DEFAULT_PROPERTY(",output=pem,structure=PrivateKeyInfo"),
+                     p11prov_mlkem_encoder_priv_key_info_pem_functions);
     }
 
     TERM_ALGO(encoder);
@@ -1426,6 +1494,10 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
                  p11prov_der_decoder_p11prov_ed25519_functions);
     ADD_ALGO_EXT(ED448, decoder, DEFAULT_PROPERTY(DER_DECODER_PROP),
                  p11prov_der_decoder_p11prov_ed448_functions);
+    ADD_ALGO_EXT(X25519, decoder, DEFAULT_PROPERTY(DER_DECODER_PROP),
+                 p11prov_der_decoder_p11prov_x25519_functions);
+    ADD_ALGO_EXT(X448, decoder, DEFAULT_PROPERTY(DER_DECODER_PROP),
+                 p11prov_der_decoder_p11prov_x448_functions);
     TERM_ALGO(decoder);
 #undef DEFAULT_PROPERTY
 
@@ -1440,9 +1512,15 @@ static CK_RV static_operations_init(P11PROV_CTX *ctx)
     ADD_ALGO(HKDF, hkdf, keymgmt, prop);
     ADD_ALGO_EXT(ED25519, keymgmt, prop, p11prov_ed25519_keymgmt_functions);
     ADD_ALGO_EXT(ED448, keymgmt, prop, p11prov_ed448_keymgmt_functions);
+    ADD_ALGO_EXT(X25519, keymgmt, prop, p11prov_x25519_keymgmt_functions);
+    ADD_ALGO_EXT(X448, keymgmt, prop, p11prov_x448_keymgmt_functions);
     ADD_ALGO_EXT(ML_DSA_44, keymgmt, prop, p11prov_mldsa44_keymgmt_functions);
     ADD_ALGO_EXT(ML_DSA_65, keymgmt, prop, p11prov_mldsa65_keymgmt_functions);
     ADD_ALGO_EXT(ML_DSA_87, keymgmt, prop, p11prov_mldsa87_keymgmt_functions);
+    ADD_ALGO_EXT(ML_KEM_512, keymgmt, prop, p11prov_mlkem512_keymgmt_functions);
+    ADD_ALGO_EXT(ML_KEM_768, keymgmt, prop, p11prov_mlkem768_keymgmt_functions);
+    ADD_ALGO_EXT(ML_KEM_1024, keymgmt, prop,
+                 p11prov_mlkem1024_keymgmt_functions);
     TERM_ALGO(keymgmt);
 
 #if SKEY_SUPPORT == 1
@@ -1515,6 +1593,9 @@ p11prov_query_operation(void *provctx, int operation_id, int *no_cache)
     case OSSL_OP_ASYM_CIPHER:
         *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
         return ctx->op_asym_cipher;
+    case OSSL_OP_KEM:
+        *no_cache = ctx->status == P11PROV_UNINITIALIZED ? 1 : 0;
+        return ctx->op_kem;
     case OSSL_OP_ENCODER:
         *no_cache = 0;
         return ctx->op_encoder;

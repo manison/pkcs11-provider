@@ -19,12 +19,12 @@ find_kryoptic() {
 find_kryoptic \
     "${KRYOPTIC}/target/debug/libkryoptic_pkcs11.so" \
     "${KRYOPTIC}/target/release/libkryoptic_pkcs11.so" \
-    /usr/local/lib/kryoptic/libkryoptic_pkcs11so \
+    /usr/local/lib/kryoptic/libkryoptic_pkcs11.so \
     /usr/lib64/pkcs11/libkryoptic_pkcs11.so \
     /usr/lib/pkcs11/libkryoptic_pkcs11.so \
     /usr/lib/x86_64-linux-gnu/kryoptic/libkryoptic_pkcs11.so
 
-title LINE "Creating Kyroptic database"
+title LINE "Creating Kryoptic database"
 
 # Kryoptic configuration
 cat << EOF > "$TOKDIR/kryoptic.conf"
@@ -55,4 +55,8 @@ export SUPPORT_ALLOWED_MECHANISMS=1
 # Enable SUPPORT_ML_DSA as long as it is not set already.
 if [ -z "$SUPPORT_ML_DSA" ]; then
     export SUPPORT_ML_DSA=1
+fi
+# Enable SUPPORT_ML_KEM as long as it is not set already.
+if [ -z "$SUPPORT_ML_KEM" ]; then
+    export SUPPORT_ML_KEM=1
 fi

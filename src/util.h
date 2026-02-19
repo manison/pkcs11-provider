@@ -73,6 +73,7 @@ int p11prov_get_pin(P11PROV_CTX *ctx, const char *in, char **out);
 bool cyclewait_with_timeout(uint64_t max_wait, uint64_t interval,
                             uint64_t *start_time);
 CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src);
+CK_RV p11prov_bn_to_attr(CK_ATTRIBUTE *dst, BIGNUM *bn);
 bool p11prov_x509_names_are_equal(CK_ATTRIBUTE *a, CK_ATTRIBUTE *b);
 char *p11prov_alloc_sprintf(int size_hint, const char *format, ...);
 
@@ -142,7 +143,7 @@ static inline void constant_select_buf(CK_ULONG cond, CK_ULONG size,
                                        unsigned char *dst, unsigned char *a,
                                        unsigned char *b)
 {
-    for (int i = 0; i < size; i++) {
+    for (CK_ULONG i = 0; i < size; i++) {
         volatile unsigned char A = a[i];
         volatile unsigned char B = b[i];
         volatile unsigned char mask = -(unsigned char)cond;
@@ -163,4 +164,6 @@ CK_RV p11prov_digest_util(P11PROV_CTX *provctx, const char *digest,
 void p11prov_set_attr_bool(CK_ATTRIBUTE *tmpl, CK_ATTRIBUTE_TYPE type, bool v);
 CK_RV p11prov_usage_to_template(CK_ATTRIBUTE *tmpl, size_t *size, size_t max,
                                 CK_FLAGS usage);
+CK_KEY_TYPE p11prov_get_key_type_from_string(const char *key_type);
+
 #endif /* _UTIL_H */

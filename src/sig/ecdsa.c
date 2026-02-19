@@ -201,7 +201,8 @@ static int convert_ecdsa_raw_to_der(const unsigned char *raw, size_t rawlen,
         *derlen = i2d_ECDSA_SIG(ecdsasig, NULL);
         if (*derlen <= dersize) {
             i2d_ECDSA_SIG(ecdsasig, &der);
-            ret = RET_OSSL_OK;
+        } else {
+            ret = RET_OSSL_ERR;
         }
     } else {
         BN_clear_free(r);
@@ -516,7 +517,10 @@ static int p11prov_ecdsa_verify_message_final(void *ctx)
 
     P11PROV_debug("ecdsa message verify final (ctx=%p)", ctx);
 
-    if (sigctx == NULL || sigctx->signature == NULL) {
+    if (!sigctx) {
+        return RET_OSSL_ERR;
+    }
+    if (sigctx->signature == NULL) {
         P11PROV_raise(sigctx->provctx, CKR_ARGUMENTS_BAD,
                       "Signature not available on context");
         return RET_OSSL_ERR;

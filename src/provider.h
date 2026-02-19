@@ -1,4 +1,5 @@
 /* Copyright (C) 2022 Simo Sorce <simo@redhat.com>
+   Copyright 2025 NXP
    SPDX-License-Identifier: Apache-2.0 */
 
 #ifndef _PROVIDER_H
@@ -126,6 +127,12 @@
 #define P11PROV_DESCS_ED448 "PKCS11 ED448 Implementation"
 #define P11PROV_NAMES_ED448ph "ED448ph"
 #define P11PROV_DESCS_ED448ph "PKCS11 ED448ph implementation"
+#define P11PROV_NAMES_X25519 "X25519:1.3.101.110"
+#define P11PROV_NAME_X25519 "X25519"
+#define P11PROV_DESCS_X25519 "PKCS11 X25519 Implementation"
+#define P11PROV_NAMES_X448 "X448:1.3.101.111"
+#define P11PROV_NAME_X448 "X448"
+#define P11PROV_DESCS_X448 "PKCS11 X448 Implementation"
 #define P11PROV_NAMES_ML_DSA_44 \
     "ML-DSA-44:MLDSA44:2.16.840.1.101.3.4.3.17:id-ml-dsa-44"
 #define P11PROV_DESCS_ML_DSA_44 "PKCS11 ML-DSA-44 implementation"
@@ -135,6 +142,15 @@
 #define P11PROV_NAMES_ML_DSA_87 \
     "ML-DSA-87:MLDSA87:2.16.840.1.101.3.4.3.19:id-ml-dsa-87"
 #define P11PROV_DESCS_ML_DSA_87 "PKCS11 ML-DSA-87 implementation"
+#define P11PROV_NAMES_ML_KEM_512 \
+    "ML-KEM-512:MLKEM512:id-alg-ml-kem-512:2.16.840.1.101.3.4.4.1"
+#define P11PROV_DESCS_ML_KEM_512 "PKCS11 ML-KEM-512 implementation"
+#define P11PROV_NAMES_ML_KEM_768 \
+    "ML-KEM-768:MLKEM768:id-alg-ml-kem-768:2.16.840.1.101.3.4.4.2"
+#define P11PROV_DESCS_ML_KEM_768 "PKCS11 ML-KEM-768 implementation"
+#define P11PROV_NAMES_ML_KEM_1024 \
+    "ML-KEM-1024:MLKEM1024:id-alg-ml-kem-1024:2.16.840.1.101.3.4.4.3"
+#define P11PROV_DESCS_ML_KEM_1024 "PKCS11 ML-KEM-1024 implementation"
 #define P11PROV_NAMES_RAND "PKCS11-RAND"
 #define P11PROV_DESCS_RAND "PKCS11 Random Generator"
 #define P11PROV_NAME_CERTIFICATE "CERTIFICATE"
@@ -212,6 +228,15 @@
 #define P11PROV_DESCS_AES_192_CTS "AES-192 CTS PKCS11 Provider Implementation"
 #define P11PROV_NAMES_AES_128_CTS "AES-128-CBC-CTS"
 #define P11PROV_DESCS_AES_128_CTS "AES-128 CTS PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_256_GCM "AES-256-GCM"
+#define P11PROV_DESCS_AES_256_GCM "AES-256 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_192_GCM "AES-192-GCM"
+#define P11PROV_DESCS_AES_192_GCM "AES-192 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_AES_128_GCM "AES-128-GCM"
+#define P11PROV_DESCS_AES_128_GCM "AES-128 GCM PKCS11 Provider Implementation"
+#define P11PROV_NAMES_CHACHA20_POLY1305 "ChaCha20-Poly1305"
+#define P11PROV_DESCS_CHACHA20_POLY1305 \
+    "CHACHA20-POLY1305 PKCS11 Provider Implementation"
 #define P11PROV_NAME_GENERIC_SECRET "GENERIC-SECRET"
 #define P11PROV_NAMES_GENERIC_SECRET P11PROV_NAME_GENERIC_SECRET
 #define P11PROV_DESCS_GENERIC_SECRET "PKCS11 Generic Secret Implementation"
@@ -229,7 +254,7 @@ typedef struct p11prov_session P11PROV_SESSION;
 typedef struct p11prov_session_pool P11PROV_SESSION_POOL;
 typedef struct p11prov_obj_pool P11PROV_OBJ_POOL;
 
-#if __SANITIZE_ADDRESS__
+#ifdef __SANITIZE_ADDRESS__
 #define P11PROV_ADDRESS_SANITIZER 1
 #endif
 #if defined(__has_feature)
@@ -299,8 +324,8 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
     static OSSL_FUNC_##type##_##name##_fn prefix##_##name
 
 #include "interface.h"
-#include "objects.h"
-#include "keymgmt.h"
+#include "obj/object.h"
+#include "kmgmt/keymgmt.h"
 #include "store.h"
 #include "sig/signature.h"
 #include "asymmetric_cipher.h"
@@ -313,10 +338,11 @@ int p11prov_pop_error_to_mark(P11PROV_CTX *ctx);
 #include "slot.h"
 #include "random.h"
 #include "pk11_uri.h"
+#include "kem.h"
 
 #if SKEY_SUPPORT == 1
 #include "cipher.h"
-#include "skeymgmt.h"
+#include "kmgmt/skey.h"
 #endif
 
 /* TLS */

@@ -274,7 +274,7 @@ done:
 static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
                         void **output)
 {
-    char pin[MAX_PIN_LENGTH + 1];
+    char pin[MAX_PIN_LENGTH + 1] = { 0 };
     char *pinfile;
     char *filename;
     BIO *fp;
@@ -301,7 +301,7 @@ static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
         ret = ENOENT;
         goto done;
     }
-    ret = BIO_gets(fp, pin, MAX_PIN_LENGTH);
+    ret = BIO_gets(fp, pin, sizeof(pin));
     if (ret <= 0) {
         P11PROV_debug("Failed to get pin from %s (%d)", filename, ret);
         ret = EINVAL;
@@ -1024,17 +1024,35 @@ void byteswap_buf(unsigned char *src, unsigned char *dest, size_t len)
 CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src)
 {
     if (src->ulValueLen) {
-        dst->pValue = OPENSSL_malloc(src->ulValueLen);
+        dst->pValue = OPENSSL_memdup(src->pValue, src->ulValueLen);
         if (!dst->pValue) {
             return CKR_HOST_MEMORY;
         }
-        memcpy(dst->pValue, src->pValue, src->ulValueLen);
     } else {
         dst->pValue = NULL;
     }
     dst->ulValueLen = src->ulValueLen;
     dst->type = src->type;
 
+    return CKR_OK;
+}
+
+CK_RV p11prov_bn_to_attr(CK_ATTRIBUTE *dst, BIGNUM *bn)
+{
+    int bn_len = BN_num_bytes(bn);
+
+    dst->pValue = OPENSSL_malloc(bn_len);
+    if (!dst->pValue) {
+        return CKR_HOST_MEMORY;
+    }
+
+    if (BN_bn2bin(bn, dst->pValue) != bn_len) {
+        OPENSSL_free(dst->pValue);
+        dst->pValue = NULL;
+        return CKR_GENERAL_ERROR;
+    }
+
+    dst->ulValueLen = bn_len;
     return CKR_OK;
 }
 
@@ -1208,13 +1226,14 @@ CK_RV p11prov_digest_util(P11PROV_CTX *ctx, const char *digest,
         goto done;
     }
 
-    dlen = EVP_MD_get_size(md);
-    if (dlen == -1) {
+    err = EVP_MD_get_size(md);
+    if (err < 0) {
         rv = CKR_GENERAL_ERROR;
         P11PROV_raise(ctx, rv, "Failed to get %s digest length", digest);
         goto done;
     }
 
+    dlen = (unsigned int)err;
     if (output->data) {
         if (output->length < dlen) {
             rv = CKR_GENERAL_ERROR;
@@ -1313,4 +1332,22 @@ CK_RV p11prov_usage_to_template(CK_ATTRIBUTE *tmpl, size_t *size, size_t max,
 
     *size = idx;
     return CKR_OK;
+}
+
+CK_KEY_TYPE p11prov_get_key_type_from_string(const char *key_type)
+{
+    if (key_type == NULL) {
+        /* Default to generic secret key */
+        return CKK_GENERIC_SECRET;
+    }
+
+    if (strcmp(key_type, "AES") == 0) {
+        return CKK_AES;
+    }
+    if (strcmp(key_type, "GENERIC-SECRET") == 0) {
+        return CKK_GENERIC_SECRET;
+    }
+
+    /* Unknown key type */
+    return CK_UNAVAILABLE_INFORMATION;
 }

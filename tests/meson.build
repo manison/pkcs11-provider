@@ -116,6 +116,7 @@ test_programs = {
   'ccerts': ['ccerts.c', 'util.c'],
   'tecx': ['tecx.c', 'util.c'],
   'tskey-kdf': ['tskey_kdf.c', 'util.c'],
+  'taead': ['taead.c', 'util.c'],
 }
 
 test_executables = []
@@ -162,7 +163,7 @@ tests = {
   'genkey': {'suites': all_suites},
   'pkey': {'suites': all_suites},
   'session': {'suites': all_suites},
-  'skey': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'skey': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
   'rand': {'suites': all_suites},
   'readkeys': {'suites': all_suites},
   'tls': {'suites': all_suites, 'is_parallel': false, 'timeout': 60},
@@ -171,6 +172,7 @@ tests = {
   'ecxc': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
   'cms': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'pinlock': {'suites': ['kryoptic']},
+  'aead': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
 }
 
 test_wrapper = find_program('test-wrapper')
