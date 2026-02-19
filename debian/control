@@ -1,6 +1,5 @@
 Source: pkcs11-provider
 Section: libs
-Priority: optional
 Maintainer: Luca Boccassi <bluca@debian.org>
 Build-Depends: debhelper-compat (= 13),
                dh-package-notes,
