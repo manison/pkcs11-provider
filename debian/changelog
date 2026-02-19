@@ -1,3 +1,13 @@
+pkcs11-provider (1.2.0-1) unstable; urgency=medium
+
+  * Update upstream source from tag 'upstream/1.2.0'
+  * Drop priority from d/control, now defaults to optional
+  * Drop Rules-Requires-Root, now defaults to no
+  * Bump Standards-version to 4.7.3
+  * Add patch to fix 32bit build
+
+ -- Luca Boccassi <bluca@debian.org>  Thu, 19 Feb 2026 22:21:04 +0000
+
 pkcs11-provider (1.0-3) unstable; urgency=medium
 
   * Disable unit tests at build time (Closes: #1102965)
