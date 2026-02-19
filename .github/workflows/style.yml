@@ -9,7 +9,7 @@ jobs:
   build:
     name: Check Style
     runs-on: ubuntu-22.04
-    container: fedora:latest
+    container: quay.io/fedora/fedora:latest
     steps:
       - name: Install Dependencies
         run: |
@@ -27,13 +27,6 @@ jobs:
       - name: Generate Makefile
         run: |
           meson setup builddir
-      - name: Run Clang Tidy
-        run: |
-          run-clang-tidy \
-            -checks=-*,readability-braces-around-statements \
-            -config "{WarningsAsErrors: '*'}" \
-            -header-filter "src/pkcs11.h" \
-            -quiet -p builddir
       - name: Check the Style
         run: make check-style || (make check-style-show; exit -1)
       - name: Check spelling

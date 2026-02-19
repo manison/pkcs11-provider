@@ -12,19 +12,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [fedora, debian, centos]
+        name: [fedora, debian, centos9, centos10]
         include:
           - name: fedora
-            container: fedora:latest
+            container: quay.io/fedora/fedora:latest
           - name: debian
-            container: debian:sid
-          - name: centos
+            container: quay.io/opendevmirror/debian:trixie
+          - name: centos9
             container: quay.io/centos/centos:stream9
+          - name: centos10
+            container: quay.io/centos/centos:stream10
     container: ${{ matrix.container }}
     steps:
       - name: Install Dependencies
         run: |
-            if [ "${{ matrix.name }}" = centos ]; then
+            if [ "${{ matrix.name }}" = "centos9" -o "${{ matrix.name }}" = "centos10" ]; then
               dnf_opts="--enablerepo=crb"
             fi
             if [ -f /etc/redhat-release ]; then
@@ -32,15 +34,13 @@ jobs:
                 git gcc meson expect python3 python3-six which \
                 pkgconf-pkg-config openssl-devel openssl xz \
                 nss-softokn nss-tools nss-softokn-devel \
-                softhsm opensc p11-kit-devel p11-kit-server \
-                rpm-build nss-devel gnutls-utils
+                softhsm opensc p11-kit-devel rpm-build nss-devel
             elif [ -f /etc/debian_version ]; then
               apt-get -q update
               apt-get -yq install git gcc meson expect \
                 pkg-config libssl-dev openssl \
                 xz-utils libnss3 libnss3-tools libnss3-dev \
-                softhsm2 opensc p11-kit libp11-kit-dev p11-kit-modules \
-                gnutls-bin
+                softhsm2 opensc p11-kit libp11-kit-dev p11-kit-modules
             fi
 
       - name: Checkout Repository
@@ -65,5 +65,5 @@ jobs:
         run: |
           mkdir -p rpmbuild/SOURCES
           cp builddir/meson-dist/pkcs11-provider*tar.xz rpmbuild/SOURCES/
-          rpmbuild --define "_topdir $PWD/rpmbuild" -ba \
+          rpmbuild --define "_topdir $PWD/rpmbuild" -ba --without=gpgcheck \
               packaging/pkcs11-provider.spec

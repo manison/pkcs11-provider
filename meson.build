@@ -1,6 +1,6 @@
 project(
   'pkcs11-provider', 'c',
-  version: '1.0',
+  version: '1.2.0',
   meson_version: '>= 0.57',
   default_options: ['c_std=c11'],
 )
@@ -45,9 +45,23 @@ conf.set_quoted('PACKAGE_NAME', meson.project_name())
 conf.set('PACKAGE_MAJOR', major_version)
 conf.set('PACKAGE_MINOR', minor_version)
 
-libcrypto = dependency('libcrypto', version: '>= 3.0.7')
+libcrypto = dependency('libcrypto', version: '>= 3.0.7', required: false)
+if not libcrypto.found()
+  libcrypto = dependency('libcrypto3', version: '>= 3.0.7', required: true)
+endif
 provider_path = libcrypto.get_variable(pkgconfig: 'modulesdir')
-libssl = dependency('libssl', version: '>= 3.0.7')
+libssl = dependency('libssl', version: '>= 3.0.7', required: false)
+if not libssl.found()
+  libssl = dependency('libssl3', version: '>= 3.0.7', required: true, method: 'pkg-config')
+endif
+
+# Set build version and build info definitions
+conf.set_quoted('P11PROV_VERSION', meson.project_version())
+build_info = get_option('build_info')
+if build_info == ''
+  build_info = 'Built with OpenSSL version ' + libcrypto.version()
+endif
+conf.set_quoted('P11PROV_BUILDINFO', build_info)
 
 host_system = host_machine.system()
 if host_system == 'windows'

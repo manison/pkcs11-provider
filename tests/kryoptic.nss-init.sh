@@ -24,8 +24,12 @@ source "${TESTSSRCDIR}/kryoptic-init.sh"
 
 export TOKENCONFIGVARS="export KRYOPTIC_CONF=${TMPPDIR}/kryoptic.conf"
 export TOKENOPTIONS="${TOKENOPTIONS}\npkcs11-module-quirks = no-allowed-mechanisms"
-export TESTPORT="36000"
+export TESTPORT="29000"
 
 # While this works with the default DB, the NSS DB does not support this
 # attribute
 export SUPPORT_ALLOWED_MECHANISMS=0
+# not yet
+export SUPPORT_ML_DSA=0
+# not yet
+export SUPPORT_ML_KEM=0

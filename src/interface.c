@@ -1,4 +1,5 @@
 /* Copyright (C) 2022 Simo Sorce <simo@redhat.com>
+   Copyright 2025 NXP
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
@@ -57,8 +58,12 @@ struct p11prov_interface {
     CK_C_FindObjectsFinal FindObjectsFinal;
     CK_C_EncryptInit EncryptInit;
     CK_C_Encrypt Encrypt;
+    CK_C_EncryptUpdate EncryptUpdate;
+    CK_C_EncryptFinal EncryptFinal;
     CK_C_DecryptInit DecryptInit;
     CK_C_Decrypt Decrypt;
+    CK_C_DecryptUpdate DecryptUpdate;
+    CK_C_DecryptFinal DecryptFinal;
     CK_C_DigestInit DigestInit;
     CK_C_DigestUpdate DigestUpdate;
     CK_C_DigestFinal DigestFinal;
@@ -70,11 +75,25 @@ struct p11prov_interface {
     CK_C_Verify Verify;
     CK_C_VerifyUpdate VerifyUpdate;
     CK_C_VerifyFinal VerifyFinal;
+    CK_C_GenerateKey GenerateKey;
     CK_C_GenerateKeyPair GenerateKeyPair;
     CK_C_DeriveKey DeriveKey;
     CK_C_SeedRandom SeedRandom;
     CK_C_GenerateRandom GenerateRandom;
     CK_C_GetInterface GetInterface;
+    CK_C_SessionCancel SessionCancel;
+    CK_C_MessageEncryptInit MessageEncryptInit;
+    CK_C_EncryptMessage EncryptMessage;
+    CK_C_EncryptMessageBegin EncryptMessageBegin;
+    CK_C_EncryptMessageNext EncryptMessageNext;
+    CK_C_MessageEncryptFinal MessageEncryptFinal;
+    CK_C_MessageDecryptInit MessageDecryptInit;
+    CK_C_DecryptMessage DecryptMessage;
+    CK_C_DecryptMessageBegin DecryptMessageBegin;
+    CK_C_DecryptMessageNext DecryptMessageNext;
+    CK_C_MessageDecryptFinal MessageDecryptFinal;
+    CK_C_EncapsulateKey EncapsulateKey;
+    CK_C_DecapsulateKey DecapsulateKey;
 };
 
 #include "interface.gen.c"
@@ -89,11 +108,13 @@ static CK_RV p11prov_NO_GetInterface(CK_UTF8CHAR_PTR pInterfaceName,
 
 #define ASSIGN_FN(name) intf->name = list.fns->C_##name
 #define ASSIGN_FN_3_0(name) intf->name = list.fns_3_0->C_##name
+#define ASSIGN_FN_3_2(name) intf->name = list.fns_3_2->C_##name
 static void populate_interface(P11PROV_INTERFACE *intf, CK_INTERFACE *ck_intf)
 {
     union {
         CK_FUNCTION_LIST_PTR fns;
         CK_FUNCTION_LIST_3_0_PTR fns_3_0;
+        CK_FUNCTION_LIST_3_2_PTR fns_3_2;
     } list;
 
     list.fns = (CK_FUNCTION_LIST_PTR)ck_intf->pFunctionList;
@@ -129,8 +150,12 @@ static void populate_interface(P11PROV_INTERFACE *intf, CK_INTERFACE *ck_intf)
     ASSIGN_FN(FindObjectsFinal);
     ASSIGN_FN(EncryptInit);
     ASSIGN_FN(Encrypt);
+    ASSIGN_FN(EncryptUpdate);
+    ASSIGN_FN(EncryptFinal);
     ASSIGN_FN(DecryptInit);
     ASSIGN_FN(Decrypt);
+    ASSIGN_FN(DecryptUpdate);
+    ASSIGN_FN(DecryptFinal);
     ASSIGN_FN(DigestInit);
     ASSIGN_FN(DigestUpdate);
     ASSIGN_FN(DigestFinal);
@@ -142,21 +167,39 @@ static void populate_interface(P11PROV_INTERFACE *intf, CK_INTERFACE *ck_intf)
     ASSIGN_FN(Verify);
     ASSIGN_FN(VerifyUpdate);
     ASSIGN_FN(VerifyFinal);
+    ASSIGN_FN(GenerateKey);
     ASSIGN_FN(GenerateKeyPair);
     ASSIGN_FN(DeriveKey);
     ASSIGN_FN(SeedRandom);
     ASSIGN_FN(GenerateRandom);
-    if (intf->version.major == 3) {
+    if (intf->version.major >= 3) {
         ASSIGN_FN_3_0(GetInterface);
+        ASSIGN_FN_3_0(SessionCancel);
+        ASSIGN_FN_3_0(MessageEncryptInit);
+        ASSIGN_FN_3_0(EncryptMessage);
+        ASSIGN_FN_3_0(EncryptMessageBegin);
+        ASSIGN_FN_3_0(EncryptMessageNext);
+        ASSIGN_FN_3_0(MessageEncryptFinal);
+        ASSIGN_FN_3_0(MessageDecryptInit);
+        ASSIGN_FN_3_0(DecryptMessage);
+        ASSIGN_FN_3_0(DecryptMessageBegin);
+        ASSIGN_FN_3_0(DecryptMessageNext);
+        ASSIGN_FN_3_0(MessageDecryptFinal);
+        if (intf->version.minor >= 2) {
+            ASSIGN_FN_3_2(EncapsulateKey);
+            ASSIGN_FN_3_2(DecapsulateKey);
+        }
     }
 }
 
 static CK_RV p11prov_interface_init(P11PROV_MODULE *mctx)
 {
-    /* Try to get 3.0 interface by default */
+    /* Try to get 3.2 interface by default,
+     * then fallback to whatever is the default version
+     * for the token */
     P11PROV_INTERFACE *intf;
     CK_UTF8CHAR_PTR intf_name = (CK_UTF8CHAR_PTR) "PKCS 11";
-    CK_VERSION version = { 3, 0 };
+    CK_VERSION version = { 3, 2 };
     CK_INTERFACE *ck_interface;
     CK_RV ret;
 

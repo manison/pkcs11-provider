@@ -34,10 +34,13 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
         unsigned long retrnums = 0;
         for (size_t i = 0; i < attrnums; i++) {
             if (q[i].ulValueLen == CK_UNAVAILABLE_INFORMATION) {
-                /* This can't happen according to the algorithm described
-                 * in the spec when the call returns CKR_OK. */
+                /* This means the attribute is valid, but not available for a
+                 * given object. Just skip it, unless it is required */
+                if (!attrs[i].required) {
+                    continue;
+                }
                 ret = CKR_GENERAL_ERROR;
-                P11PROV_raise(ctx, ret, "Failed to get attributes");
+                P11PROV_raise(ctx, ret, "Failed to get required attributes");
                 goto done;
             }
             if (attrs[i].allocate) {
@@ -80,9 +83,17 @@ CK_RV p11prov_fetch_attributes(P11PROV_CTX *ctx, P11PROV_SESSION *session,
                     if (attrs[i].required) {
                         return ret;
                     }
+                    /* Invalid attribute: No need to call the function again for
+                     * this attribute */
+                    continue;
                 } else {
-                    attrs[i].attr.pValue =
-                        OPENSSL_zalloc(attrs[i].attr.ulValueLen + 1);
+                    CK_ULONG len = attrs[i].attr.ulValueLen;
+                    if (len == CK_UNAVAILABLE_INFORMATION) {
+                        /* The attribute is known to the module, but not
+                         * available on this object */
+                        continue;
+                    }
+                    attrs[i].attr.pValue = OPENSSL_zalloc(len + 1);
                     if (!attrs[i].attr.pValue) {
                         ret = CKR_HOST_MEMORY;
                         P11PROV_raise(ctx, ret, "Failed to get attributes");
@@ -263,7 +274,7 @@ done:
 static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
                         void **output)
 {
-    char pin[MAX_PIN_LENGTH + 1];
+    char pin[MAX_PIN_LENGTH + 1] = { 0 };
     char *pinfile;
     char *filename;
     BIO *fp;
@@ -290,7 +301,7 @@ static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
         ret = ENOENT;
         goto done;
     }
-    ret = BIO_gets(fp, pin, MAX_PIN_LENGTH);
+    ret = BIO_gets(fp, pin, sizeof(pin));
     if (ret <= 0) {
         P11PROV_debug("Failed to get pin from %s (%d)", filename, ret);
         ret = EINVAL;
@@ -670,8 +681,9 @@ static char *uri_component(const char *name, const char *val, size_t vlen,
     return c;
 }
 
-char *p11prov_key_to_uri(P11PROV_CTX *ctx, P11PROV_OBJ *key)
+char *p11prov_obj_to_uri(P11PROV_OBJ *obj)
 {
+    P11PROV_CTX *ctx;
     P11PROV_SLOTS_CTX *slots;
     P11PROV_SLOT *slot;
     CK_TOKEN_INFO *token;
@@ -691,10 +703,11 @@ char *p11prov_key_to_uri(P11PROV_CTX *ctx, P11PROV_OBJ *key)
     size_t size_hint = 0;
     CK_RV ret;
 
-    class = p11prov_obj_get_class(key);
-    slot_id = p11prov_obj_get_slotid(key);
-    cka_id = p11prov_obj_get_attr(key, CKA_ID);
-    cka_label = p11prov_obj_get_attr(key, CKA_LABEL);
+    ctx = p11prov_obj_get_prov_ctx(obj);
+    class = p11prov_obj_get_class(obj);
+    slot_id = p11prov_obj_get_slotid(obj);
+    cka_id = p11prov_obj_get_attr(obj, CKA_ID);
+    cka_label = p11prov_obj_get_attr(obj, CKA_LABEL);
 
     switch (class) {
     case CKO_DATA:
@@ -1011,17 +1024,35 @@ void byteswap_buf(unsigned char *src, unsigned char *dest, size_t len)
 CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src)
 {
     if (src->ulValueLen) {
-        dst->pValue = OPENSSL_malloc(src->ulValueLen);
+        dst->pValue = OPENSSL_memdup(src->pValue, src->ulValueLen);
         if (!dst->pValue) {
             return CKR_HOST_MEMORY;
         }
-        memcpy(dst->pValue, src->pValue, src->ulValueLen);
     } else {
         dst->pValue = NULL;
     }
     dst->ulValueLen = src->ulValueLen;
     dst->type = src->type;
 
+    return CKR_OK;
+}
+
+CK_RV p11prov_bn_to_attr(CK_ATTRIBUTE *dst, BIGNUM *bn)
+{
+    int bn_len = BN_num_bytes(bn);
+
+    dst->pValue = OPENSSL_malloc(bn_len);
+    if (!dst->pValue) {
+        return CKR_HOST_MEMORY;
+    }
+
+    if (BN_bn2bin(bn, dst->pValue) != bn_len) {
+        OPENSSL_free(dst->pValue);
+        dst->pValue = NULL;
+        return CKR_GENERAL_ERROR;
+    }
+
+    dst->ulValueLen = bn_len;
     return CKR_OK;
 }
 
@@ -1195,13 +1226,14 @@ CK_RV p11prov_digest_util(P11PROV_CTX *ctx, const char *digest,
         goto done;
     }
 
-    dlen = EVP_MD_get_size(md);
-    if (dlen == -1) {
+    err = EVP_MD_get_size(md);
+    if (err < 0) {
         rv = CKR_GENERAL_ERROR;
         P11PROV_raise(ctx, rv, "Failed to get %s digest length", digest);
         goto done;
     }
 
+    dlen = (unsigned int)err;
     if (output->data) {
         if (output->length < dlen) {
             rv = CKR_GENERAL_ERROR;
@@ -1258,4 +1290,64 @@ done:
     EVP_MD_CTX_free(mdctx);
     EVP_MD_free(md);
     return rv;
+}
+
+static const CK_BBOOL val_true = CK_TRUE;
+static const CK_BBOOL val_false = CK_FALSE;
+
+void p11prov_set_attr_bool(CK_ATTRIBUTE *tmpl, CK_ATTRIBUTE_TYPE type, bool v)
+{
+    tmpl->type = type;
+    if (v) {
+        tmpl->pValue = (void *)&val_true;
+        tmpl->ulValueLen = sizeof(val_true);
+    } else {
+        tmpl->pValue = (void *)&val_false;
+        tmpl->ulValueLen = sizeof(val_false);
+    }
+}
+
+CK_RV p11prov_usage_to_template(CK_ATTRIBUTE *tmpl, size_t *size, size_t max,
+                                CK_FLAGS usage)
+{
+    static struct flag_to_attr {
+        CK_FLAGS flag;
+        CK_ATTRIBUTE_TYPE type;
+    } flag_to_attr[] = {
+        { CKF_ENCRYPT, CKA_ENCRYPT }, { CKF_DECRYPT, CKA_DECRYPT },
+        { CKF_SIGN, CKA_SIGN },       { CKF_VERIFY, CKA_VERIFY },
+        { CKF_WRAP, CKA_WRAP },       { CKF_UNWRAP, CKA_UNWRAP },
+        { CKF_DERIVE, CKA_DERIVE },   { 0, 0 },
+    };
+    size_t idx = *size;
+
+    for (int i = 0; flag_to_attr[i].flag != 0; i++) {
+        if (usage & flag_to_attr[i].flag) {
+            if (idx >= max) {
+                return CKR_HOST_MEMORY;
+            }
+            p11prov_set_attr_bool(&tmpl[idx++], flag_to_attr[i].type, true);
+        }
+    }
+
+    *size = idx;
+    return CKR_OK;
+}
+
+CK_KEY_TYPE p11prov_get_key_type_from_string(const char *key_type)
+{
+    if (key_type == NULL) {
+        /* Default to generic secret key */
+        return CKK_GENERIC_SECRET;
+    }
+
+    if (strcmp(key_type, "AES") == 0) {
+        return CKK_AES;
+    }
+    if (strcmp(key_type, "GENERIC-SECRET") == 0) {
+        return CKK_GENERIC_SECRET;
+    }
+
+    /* Unknown key type */
+    return CK_UNAVAILABLE_INFORMATION;
 }

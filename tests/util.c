@@ -1,9 +1,11 @@
 /* Copyright (C) 2024 Simo Sorce <simo@redhat.com>
+   Copyright 2025 NXP
    SPDX-License-Identifier: Apache-2.0 */
 
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdbool.h>
+#include <openssl/core.h>
 #include <openssl/err.h>
 #include <openssl/store.h>
 #include <openssl/evp.h>
@@ -33,8 +35,9 @@ void ossl_err_print(void)
         first = false;
     }
     if (first) {
-        fprintf(stderr, "\n");
+        fprintf(stderr, "[No errors on the OpenSSL stack]\n");
     }
+    fflush(stderr);
 }
 
 EVP_PKEY *load_key(const char *uri)
@@ -163,18 +166,27 @@ void hexify(char *out, unsigned char *byte, size_t len)
     out[len * 3] = '\0';
 }
 
-EVP_PKEY *util_gen_key(const char *label)
+void unhexify(unsigned char *out, size_t *outlen, const char *in)
+{
+    OPENSSL_hexstr2buf_ex(out, *outlen, outlen, in, '\0');
+}
+
+EVP_PKEY *util_gen_key(const char *type, const char *label)
 {
     unsigned char id[16];
     char idhex[16 * 3 + 1];
     char *uri;
+    const char *name = NULL;
+    const char *ec_name = "EC";
+    const char *named_curve = "named_curve";
+    const char *curve = NULL;
     size_t rsa_bits = 3072;
-    OSSL_PARAM params[3];
+    OSSL_PARAM params[4];
     EVP_PKEY_CTX *ctx;
     EVP_PKEY *key = NULL;
+    int pnum = 0;
     int ret;
 
-    /* RSA */
     ret = RAND_bytes(id, 16);
     if (ret != 1) {
         PRINTERROSSL("Failed to set generate key id\n");
@@ -188,11 +200,52 @@ EVP_PKEY *util_gen_key(const char *label)
         exit(EXIT_FAILURE);
     }
 
-    params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
-    params[1] = OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
-    params[2] = OSSL_PARAM_construct_end();
+    params[pnum++] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+    if (strcmp(type, "RSA") == 0) {
+        name = "RSA";
+        params[pnum++] =
+            OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    } else if (strcmp(type, "RSA 2048") == 0) {
+        name = "RSA";
+        rsa_bits = 2048;
+        params[pnum++] =
+            OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    } else if (strcmp(type, "RSA 3072") == 0) {
+        name = "RSA";
+        rsa_bits = 3072;
+        params[pnum++] =
+            OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    } else if (strcmp(type, "RSA 4096") == 0) {
+        name = "RSA";
+        rsa_bits = 4096;
+        params[pnum++] =
+            OSSL_PARAM_construct_size_t("rsa_keygen_bits", &rsa_bits);
+    } else if (strcmp(type, "P-256") == 0) {
+        curve = "P-256";
+    } else if (strcmp(type, "P-384") == 0) {
+        curve = "P-384";
+    } else if (strcmp(type, "P-521") == 0) {
+        curve = "P-521";
+    } else if (strcmp(type, "ED 25519") == 0) {
+        name = "ED25519";
+    } else if (strcmp(type, "ED 448") == 0) {
+        name = "ED448";
+    } else {
+        /* Fall back to the provided type */
+        name = type;
+    }
 
-    ctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", "provider=pkcs11");
+    if (curve) {
+        name = ec_name;
+        params[pnum++] = OSSL_PARAM_construct_utf8_string("ec_paramgen_curve",
+                                                          (char *)curve, 0);
+        params[pnum++] = OSSL_PARAM_construct_utf8_string(
+            "ec_param_enc", (char *)named_curve, 0);
+    }
+
+    params[pnum++] = OSSL_PARAM_construct_end();
+
+    ctx = EVP_PKEY_CTX_new_from_name(NULL, name, "provider=pkcs11");
     if (ctx == NULL) {
         PRINTERROSSL("Failed to init PKEY context\n");
         exit(EXIT_FAILURE);

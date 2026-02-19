@@ -51,6 +51,9 @@ cat >"$TMPPDIR/softhsm.conf" <<EOF
 directories.tokendir = $TOKDIR
 objectstore.backend = file
 log.level = DEBUG
+# The hashed ECDSA mechanisms wrongly do not support multi-part operations
+# https://github.com/softhsm/SoftHSMv2/pull/683
+slots.mechanisms = -CKM_ECDSA_SHA1,CKM_ECDSA_SHA224,CKM_ECDSA_SHA256,CKM_ECDSA_SHA384,CKM_ECDSA_SHA512
 EOF
 
 export SOFTHSM2_CONF=$TMPPDIR/softhsm.conf
@@ -69,3 +72,14 @@ export TOKENCONFIGVARS="export SOFTHSM2_CONF=${TMPPDIR}/softhsm.conf"
 export TESTPORT="32000"
 
 export SUPPORT_ALLOWED_MECHANISMS=1
+
+# softhsm loops into itself badly on symmetric operation
+export SUPPORT_SYMMETRIC=0
+
+export SUPPORT_ML_DSA=0
+export SUPPORT_ML_KEM=0
+
+# Montgomery curves are not supported in softhsm
+export SUPPORT_X25519=0
+export SUPPORT_X448=0
+
