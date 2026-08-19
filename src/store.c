@@ -2,6 +2,7 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#include <openssl/core.h>
 #include <openssl/store.h>
 #include "store.h"
 
@@ -258,6 +259,8 @@ again:
     p11prov_uri_free(search_uri);
 }
 
+#define DISPATCH_STORE_FN(name) DECL_DISPATCH_FUNC(store, p11prov_store, name)
+
 DISPATCH_STORE_FN(open);
 DISPATCH_STORE_FN(attach);
 DISPATCH_STORE_FN(load);
@@ -504,6 +507,48 @@ static int p11prov_store_load(void *pctx, OSSL_CALLBACK *object_cb,
                 break;
             case CKP_ML_KEM_1024:
                 data_type = (char *)MLKEM_1024;
+                break;
+            default:
+                return RET_OSSL_ERR;
+            }
+            break;
+        case CKK_SLH_DSA:
+            switch (p11prov_obj_get_key_param_set(obj)) {
+            case CKP_SLH_DSA_SHA2_128S:
+                data_type = (char *)SLHDSA_SHA2_128S;
+                break;
+            case CKP_SLH_DSA_SHA2_128F:
+                data_type = (char *)SLHDSA_SHA2_128F;
+                break;
+            case CKP_SLH_DSA_SHA2_192S:
+                data_type = (char *)SLHDSA_SHA2_192S;
+                break;
+            case CKP_SLH_DSA_SHA2_192F:
+                data_type = (char *)SLHDSA_SHA2_192F;
+                break;
+            case CKP_SLH_DSA_SHA2_256S:
+                data_type = (char *)SLHDSA_SHA2_256S;
+                break;
+            case CKP_SLH_DSA_SHA2_256F:
+                data_type = (char *)SLHDSA_SHA2_256F;
+                break;
+            case CKP_SLH_DSA_SHAKE_128S:
+                data_type = (char *)SLHDSA_SHAKE_128S;
+                break;
+            case CKP_SLH_DSA_SHAKE_128F:
+                data_type = (char *)SLHDSA_SHAKE_128F;
+                break;
+            case CKP_SLH_DSA_SHAKE_192S:
+                data_type = (char *)SLHDSA_SHAKE_192S;
+                break;
+            case CKP_SLH_DSA_SHAKE_192F:
+                data_type = (char *)SLHDSA_SHAKE_192F;
+                break;
+            case CKP_SLH_DSA_SHAKE_256S:
+                data_type = (char *)SLHDSA_SHAKE_256S;
+                break;
+            case CKP_SLH_DSA_SHAKE_256F:
+                data_type = (char *)SLHDSA_SHAKE_256F;
                 break;
             default:
                 return RET_OSSL_ERR;
@@ -777,6 +822,9 @@ done:
     return ret;
 }
 
+#define DISPATCH_STORE_ELEM(NAME, name) \
+    { OSSL_FUNC_STORE_##NAME, (void (*)(void))p11prov_store_##name }
+
 const OSSL_DISPATCH p11prov_store_functions[] = {
     DISPATCH_STORE_ELEM(OPEN, open),
     DISPATCH_STORE_ELEM(ATTACH, attach),
@@ -788,3 +836,20 @@ const OSSL_DISPATCH p11prov_store_functions[] = {
     DISPATCH_STORE_ELEM(EXPORT_OBJECT, export_object),
     { 0, NULL },
 };
+
+OSSL_ALGORITHM store_algorithms[] = {
+    DEFAULT_ALGORITHM(URI, p11prov_store_functions),
+};
+
+CK_RV p11prov_register_store(P11PROV_CTX *ctx, bool fips_property)
+{
+    OSSL_ALGORITHM *algs = OPENSSL_zalloc(sizeof(OSSL_ALGORITHM) * 2);
+    if (algs == NULL) {
+        return CKR_HOST_MEMORY;
+    }
+
+    p11prov_assign_alg(&algs[0], store_algorithms, 0,
+                       fips_property ? P11PROV_FIPS_PROPERTIES : NULL);
+
+    return p11prov_ctx_add_algs(ctx, OSSL_OP_STORE, algs);
+}

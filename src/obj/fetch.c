@@ -55,18 +55,24 @@ const struct fetch_attrs EC_private_attrs[] = {
  * - CKA_P11PROV_PUB_KEY */
 #define EXTRA_EC_PARAMS 3
 
-const struct fetch_attrs ML_DSA_public_attrs[] = {
+const struct fetch_attrs PQ_ALG_public_attrs[] = {
     COMMON_KEYPAIR_ATTRIBUTES,
+    { { CKA_PARAMETER_SET, NULL, 0 }, true, true },
     { { CKA_VALUE, NULL, 0 }, true, true },
 };
 
-const struct fetch_attrs ML_DSA_private_attrs[] = {
+const struct fetch_attrs PQ_ALG_private_attrs[] = {
     COMMON_KEYPAIR_ATTRIBUTES,
+    { { CKA_PARAMETER_SET, NULL, 0 }, true, true },
     { { CKA_ALWAYS_AUTHENTICATE, NULL, 0 }, true, false },
 };
 
-#define ML_KEM_public_attrs ML_DSA_public_attrs
-#define ML_KEM_private_attrs ML_DSA_private_attrs
+#define ML_DSA_public_attrs PQ_ALG_public_attrs
+#define ML_DSA_private_attrs PQ_ALG_private_attrs
+#define ML_KEM_public_attrs PQ_ALG_public_attrs
+#define ML_KEM_private_attrs PQ_ALG_private_attrs
+#define SLH_DSA_public_attrs PQ_ALG_public_attrs
+#define SLH_DSA_private_attrs PQ_ALG_private_attrs
 
 const struct fetch_attrs secret_key_attrs[] = {
     COMMON_KEY_ATTRIBUTES,
@@ -115,6 +121,7 @@ const struct key_attrs {
     FILL_ATTRS(EC_MONTGOMERY, 1 + EXTRA_EC_PARAMS),
     FILL_ATTRS(ML_DSA, 1),
     FILL_ATTRS(ML_KEM, 1),
+    FILL_ATTRS(SLH_DSA, 1),
     FILL_KNOWN_SECRETS(1),
     { 0, 0, NULL, 0, 0 },
 };
@@ -177,6 +184,16 @@ static CK_RV fetch_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
     }
     p11prov_move_alloc_attrs(attrs, asize, key->attrs, &key->numattrs);
 
+    a = p11prov_obj_get_attr(key, CKA_PARAMETER_SET);
+    if (a) {
+        if (a->ulValueLen != sizeof(CK_ULONG)) {
+            P11PROV_raise(key->ctx, CKR_GENERAL_ERROR,
+                          "Unsupported Parameter Set format");
+            return CKR_GENERAL_ERROR;
+        }
+        key->data.key.param_set = *(CK_ULONG *)a->pValue;
+    }
+
     /* key->data.key.type is checked for validity in prep_key_attrs(),
      * here it is just a selector defaulting to secret keys */
     switch (key->data.key.type) {
@@ -220,6 +237,49 @@ static CK_RV fetch_key(P11PROV_CTX *ctx, P11PROV_SESSION *session,
             break;
         case CKP_ML_KEM_1024:
             key->data.key.size = ML_KEM_1024_PK_SIZE;
+            break;
+        default:
+            return CKR_KEY_INDIGESTIBLE;
+        }
+        key->data.key.bit_size = key->data.key.size * 8;
+        return CKR_OK;
+    case CKK_SLH_DSA:
+        switch (key->data.key.param_set) {
+        case CKP_SLH_DSA_SHA2_128S:
+            key->data.key.size = SLH_DSA_SHA2_128S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHA2_128F:
+            key->data.key.size = SLH_DSA_SHA2_128F_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHA2_192S:
+            key->data.key.size = SLH_DSA_SHA2_192S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHA2_192F:
+            key->data.key.size = SLH_DSA_SHA2_192F_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHA2_256S:
+            key->data.key.size = SLH_DSA_SHA2_256S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHA2_256F:
+            key->data.key.size = SLH_DSA_SHA2_256F_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_128S:
+            key->data.key.size = SLH_DSA_SHAKE_128S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_128F:
+            key->data.key.size = SLH_DSA_SHAKE_128F_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_192S:
+            key->data.key.size = SLH_DSA_SHAKE_192S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_192F:
+            key->data.key.size = SLH_DSA_SHAKE_192F_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_256S:
+            key->data.key.size = SLH_DSA_SHAKE_256S_PK_SIZE;
+            break;
+        case CKP_SLH_DSA_SHAKE_256F:
+            key->data.key.size = SLH_DSA_SHAKE_256F_PK_SIZE;
             break;
         default:
             return CKR_KEY_INDIGESTIBLE;
@@ -278,13 +338,10 @@ static CK_RV pre_process_ec_key_data(P11PROV_OBJ *key)
             return CKR_KEY_INDIGESTIBLE;
         }
 
-        curve_nid = EC_GROUP_get_curve_name(group);
-        if (curve_nid != NID_undef) {
-            curve_name = OSSL_EC_curve_nid2name(curve_nid);
-            if (curve_name == NULL) {
-                EC_GROUP_free(group);
-                return CKR_KEY_INDIGESTIBLE;
-            }
+        curve_name = p11prov_ec_group_to_curve_name(group, &curve_nid);
+        if (curve_name == NULL && curve_nid != NID_undef) {
+            EC_GROUP_free(group);
+            return CKR_KEY_INDIGESTIBLE;
         }
         key->data.key.bit_size = EC_GROUP_order_bits(group);
         key->data.key.size = (key->data.key.bit_size + 7) / 8;
@@ -323,7 +380,7 @@ static CK_RV pre_process_ec_key_data(P11PROV_OBJ *key)
         return CKR_OK;
     }
 
-    ret = decode_ec_point(key->ctx, type, attr, &ec_point);
+    ret = decode_ec_point(key->ctx, type, key->data.key.size, attr, &ec_point);
     if (ret != CKR_OK) {
         return ret;
     }
@@ -446,11 +503,6 @@ CK_RV p11prov_obj_from_handle(P11PROV_CTX *ctx, P11PROV_SESSION *session,
             if (ret == CKR_OK) {
                 obj->attrs[obj->numattrs] = a[0].attr;
                 obj->numattrs++;
-            } else if (ret == CKR_ATTRIBUTE_TYPE_INVALID) {
-                token_supports_allowed_mechs = CK_FALSE;
-                (void)p11prov_token_sup_attr(ctx, obj->slotid, SET_ATTR,
-                                             CKA_ALLOWED_MECHANISMS,
-                                             &token_supports_allowed_mechs);
             }
         }
         break;
@@ -488,7 +540,8 @@ CK_RV p11prov_obj_find(P11PROV_CTX *provctx, P11PROV_SESSION *session,
     CK_RV ret;
 
     P11PROV_debug("Find objects [class=%lu, id-len=%lu, label=%.*s]", class,
-                  id.ulValueLen, label.type == CKA_LABEL ? label.ulValueLen : 4,
+                  id.ulValueLen,
+                  label.type == CKA_LABEL ? (int)label.ulValueLen : 4,
                   label.type == CKA_LABEL ? (char *)label.pValue : "None");
 
     switch (class) {

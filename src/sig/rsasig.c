@@ -159,7 +159,7 @@ struct rsasig_data {
     { CK_UNAVAILABLE_INFORMATION, 0, 0, 0, NULL, 0, NULL, 0, NULL, 0 },
 };
 
-static struct rsasig_data *rsasig_digest_map(CK_MECHANISM_TYPE digest)
+static const struct rsasig_data *rsasig_digest_map(CK_MECHANISM_TYPE digest)
 {
     for (int i = 0; rsasig_mech_map[i].digest != CK_UNAVAILABLE_INFORMATION;
          i++) {
@@ -170,7 +170,7 @@ static struct rsasig_data *rsasig_digest_map(CK_MECHANISM_TYPE digest)
     return NULL;
 }
 
-static struct rsasig_data *rsasig_mgf_map(CK_MECHANISM_TYPE mgf)
+static const struct rsasig_data *rsasig_mgf_map(CK_MECHANISM_TYPE mgf)
 {
     for (int i = 0; rsasig_mech_map[i].digest != CK_UNAVAILABLE_INFORMATION;
          i++) {
@@ -181,7 +181,7 @@ static struct rsasig_data *rsasig_mgf_map(CK_MECHANISM_TYPE mgf)
     return NULL;
 }
 
-static struct rsasig_data *rsasig_pss_map(CK_MECHANISM_TYPE pssmech)
+static const struct rsasig_data *rsasig_pss_map(CK_MECHANISM_TYPE pssmech)
 {
     for (int i = 0; rsasig_mech_map[i].digest != CK_UNAVAILABLE_INFORMATION;
          i++) {
@@ -194,7 +194,7 @@ static struct rsasig_data *rsasig_pss_map(CK_MECHANISM_TYPE pssmech)
 
 static const char *p11prov_sig_mgf_name(CK_RSA_PKCS_MGF_TYPE mgf)
 {
-    struct rsasig_data *data;
+    const struct rsasig_data *data;
     const char *digest_name;
     CK_RV rv;
 
@@ -214,7 +214,7 @@ static const char *p11prov_sig_mgf_name(CK_RSA_PKCS_MGF_TYPE mgf)
 static CK_RSA_PKCS_MGF_TYPE p11prov_sig_map_mgf(const char *digest_name)
 {
     CK_MECHANISM_TYPE digest;
-    struct rsasig_data *data;
+    const struct rsasig_data *data;
     CK_RV rv;
 
     rv = p11prov_digest_get_by_name(digest_name, &digest);
@@ -285,10 +285,12 @@ static CK_RV p11prov_sig_pss_restrictions(P11PROV_SIG_CTX *sigctx,
     return CKR_OK;
 }
 
+static int p11prov_rsasig_set_pss_saltlen_max(void *ctx, bool max_to_digest);
+
 /* fixates pss_params based on defaults if values are not set */
 static CK_RV pss_defaults(P11PROV_SIG_CTX *sigctx)
 {
-    struct rsasig_data *data;
+    const struct rsasig_data *data;
 
     data = rsasig_digest_map(sigctx->digest);
     if (!data) {
@@ -299,15 +301,11 @@ static CK_RV pss_defaults(P11PROV_SIG_CTX *sigctx)
         sigctx->pss_params.mgf = data->mgf;
     }
     if (sigctx->pss_params.sLen == 0) {
-        /* default to digest size if not set */
-        size_t size;
-        CK_RV ret;
-
-        ret = p11prov_digest_get_digest_size(data->digest, &size);
-        if (ret != CKR_OK) {
-            return ret;
+        /* default to digest size or max awailable if not set */
+        int ret = p11prov_rsasig_set_pss_saltlen_max(sigctx, true);
+        if (ret != RET_OSSL_OK) {
+            return CKR_MECHANISM_INVALID;
         }
-        sigctx->pss_params.sLen = size;
     }
 
     return CKR_OK;
@@ -341,6 +339,7 @@ static int p11prov_rsasig_set_pss_saltlen_max(void *ctx, bool max_to_digest)
     size_t digest_size;
     CK_ULONG key_size;
     CK_ULONG key_bit_size;
+    CK_ULONG min_required_size;
     CK_RV rv;
 
     if (sigctx->digest == 0) {
@@ -357,25 +356,37 @@ static int p11prov_rsasig_set_pss_saltlen_max(void *ctx, bool max_to_digest)
 
     key_size = p11prov_obj_get_key_size(sigctx->key);
     if (key_size == CK_UNAVAILABLE_INFORMATION) {
-        P11PROV_raise(sigctx->provctx, rv, "Unavailable key");
+        P11PROV_raise(sigctx->provctx, CKR_KEY_INDIGESTIBLE, "Unavailable key");
         return RET_OSSL_ERR;
     }
     key_bit_size = p11prov_obj_get_key_bit_size(sigctx->key);
     if (key_bit_size == CK_UNAVAILABLE_INFORMATION) {
-        P11PROV_raise(sigctx->provctx, rv, "Unavailable key");
+        P11PROV_raise(sigctx->provctx, CKR_KEY_INDIGESTIBLE, "Unavailable key");
+        return RET_OSSL_ERR;
+    }
+
+    min_required_size = digest_size + 2;
+    if ((key_bit_size & 0x07) == 1) {
+        min_required_size += 1;
+    }
+
+    if (key_size < min_required_size) {
+        P11PROV_raise(sigctx->provctx, CKR_KEY_INDIGESTIBLE,
+                      "Key size too small for the requested digest");
         return RET_OSSL_ERR;
     }
 
     /* from openssl */
-    sigctx->pss_params.sLen = key_size - digest_size - 2;
-    if ((key_bit_size & 0x07) == 1) {
-        sigctx->pss_params.sLen -= 1;
-    }
+    sigctx->pss_params.sLen = key_size - min_required_size;
+
     if (max_to_digest && sigctx->pss_params.sLen > digest_size) {
         sigctx->pss_params.sLen = digest_size;
     }
     return RET_OSSL_OK;
 }
+
+#define DISPATCH_RSASIG_FN(name) \
+    DECL_DISPATCH_FUNC(signature, p11prov_rsasig, name)
 
 DISPATCH_RSASIG_FN(newctx);
 DISPATCH_RSASIG_FN(sign_init);
@@ -402,23 +413,20 @@ DISPATCH_RSASIG_FN(settable_ctx_params);
 
 static CK_RV p11prov_rsasig_set_mechanism(P11PROV_SIG_CTX *sigctx)
 {
-    struct rsasig_data *data = NULL;
+    const struct rsasig_data *data = NULL;
     int rv;
 
     sigctx->mechanism.mechanism = sigctx->mechtype;
     sigctx->mechanism.pParameter = NULL;
     sigctx->mechanism.ulParameterLen = 0;
 
-    if (sigctx->digest_op) {
-        data = rsasig_digest_map(sigctx->digest);
-        if (!data) {
-            return CKR_MECHANISM_INVALID;
-        }
-    }
-
     switch (sigctx->mechtype) {
     case CKM_RSA_PKCS:
         if (sigctx->digest_op) {
+            data = rsasig_digest_map(sigctx->digest);
+            if (!data) {
+                return CKR_MECHANISM_INVALID;
+            }
             sigctx->mechanism.mechanism = data->pkcs_mech;
         }
         break;
@@ -432,6 +440,10 @@ static CK_RV p11prov_rsasig_set_mechanism(P11PROV_SIG_CTX *sigctx)
         sigctx->mechanism.pParameter = &sigctx->pss_params;
         sigctx->mechanism.ulParameterLen = sizeof(sigctx->pss_params);
         if (sigctx->digest_op) {
+            data = rsasig_digest_map(sigctx->digest);
+            if (!data) {
+                return CKR_MECHANISM_INVALID;
+            }
             sigctx->mechanism.mechanism = data->pkcs_pss;
             rv = p11prov_sig_pss_restrictions(sigctx, data->pkcs_pss);
             if (rv != CKR_OK) {
@@ -463,7 +475,7 @@ static CK_RV p11prov_rsasig_encode_data(P11PROV_SIG_CTX *sigctx,
                                         unsigned char *data, size_t *datalen,
                                         unsigned char *tbs, size_t tbslen)
 {
-    struct rsasig_data *rsa_data;
+    const struct rsasig_data *rsa_data;
     size_t digest_size = 0;
     CK_RV rv;
 
@@ -835,7 +847,7 @@ p11prov_encode_rsa_pss_algorithm_id(CK_MECHANISM_TYPE digest, int saltlen,
                                     size_t *outlen)
 {
     unsigned char *buffer = NULL;
-    struct rsasig_data *data;
+    const struct rsasig_data *data;
 
     data = rsasig_digest_map(digest);
     if (!data) {
@@ -858,7 +870,7 @@ p11prov_encode_rsa_pss_algorithm_id(CK_MECHANISM_TYPE digest, int saltlen,
 static unsigned char *
 p11prov_rsapss_encode_algorithm_id(P11PROV_SIG_CTX *sigctx, size_t *outlen)
 {
-    struct rsasig_data *data, *mgf_data;
+    const struct rsasig_data *data, *mgf_data;
     int ret;
 
     /* when OpenSSL calls this before it makes the signature, we still might not
@@ -914,7 +926,7 @@ static int p11prov_rsasig_get_ctx_params(void *ctx, OSSL_PARAM *params)
     p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_ALGORITHM_ID);
     if (p) {
         unsigned char *algorithm_id = NULL;
-        struct rsasig_data *data;
+        const struct rsasig_data *data;
         size_t len;
 
         switch (sigctx->mechtype) {
@@ -998,7 +1010,7 @@ static int p11prov_rsasig_get_ctx_params(void *ctx, OSSL_PARAM *params)
         if (sigctx->pss_params.mgf != 0) {
             digest = p11prov_sig_mgf_name(sigctx->pss_params.mgf);
         } else {
-            struct rsasig_data *data;
+            const struct rsasig_data *data;
             data = rsasig_pss_map(sigctx->mechtype);
             if (data) {
                 rv = p11prov_digest_get_name(data->digest, &digest);
@@ -1249,7 +1261,7 @@ static const OSSL_PARAM *p11prov_rsasig_settable_ctx_params(void *ctx,
     return params;
 }
 
-const OSSL_DISPATCH p11prov_rsa_signature_functions[] = {
+const OSSL_DISPATCH p11prov_rsa_functions[] = {
     DISPATCH_SIG_ELEM(rsasig, NEWCTX, newctx),
     DISPATCH_SIG_ELEM(sig, FREECTX, freectx),
     DISPATCH_SIG_ELEM(sig, DUPCTX, dupctx),
@@ -1283,7 +1295,7 @@ const OSSL_DISPATCH p11prov_rsa_signature_functions[] = {
         return p11prov_rsasig_digest_verify_init(ctx, digest, provkey, \
                                                  params); \
     } \
-    const OSSL_DISPATCH p11prov_rsa_##alg##_signature_functions[] = { \
+    const OSSL_DISPATCH p11prov_rsa_##alg##_functions[] = { \
         DISPATCH_SIG_ELEM(rsasig, NEWCTX, newctx), \
         DISPATCH_SIG_ELEM(sig, FREECTX, freectx), \
         DISPATCH_SIG_ELEM(sig, DUPCTX, dupctx), \
@@ -1321,7 +1333,7 @@ DEFINE_RSA_SHA_SIG(sha3_512, "SHA3-512");
 
 CK_MECHANISM_TYPE p11prov_digest_to_rsapss_mech(CK_MECHANISM_TYPE digest)
 {
-    struct rsasig_data *data;
+    const struct rsasig_data *data;
 
     data = rsasig_digest_map(digest);
     if (!data) {

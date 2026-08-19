@@ -5,13 +5,6 @@ conf_env = environment({
   'SHARED_EXT': shlext,
 })
 
-if p11_kit.found()
-  # p11-kit-client module doesn't support Windows, so hard-coding .so is fine
-  p11_module_path = p11_kit.get_variable(pkgconfig: 'p11_module_path')
-  p11_client_path = p11_module_path / 'p11-kit-client.so'
-  conf_env.set('P11KITCLIENTPATH', p11_client_path)
-endif
-
 nss_softokn = dependency('nss-softokn', required: false)
 if not nss_softokn.found()
   nss_softokn = dependency('nss', required: false)
@@ -37,6 +30,7 @@ endif
 test_env = environment({
   'TEST_PATH': meson.current_source_dir(),
   'TESTBLDDIR': meson.current_build_dir(),
+  'LIBSPATH': meson.project_build_root() / 'src',
 })
 
 if get_option('enable_explicit_EC_test')
@@ -92,7 +86,6 @@ if get_option('b_sanitize') == 'address'
   add_env = {
     'ASAN_OPTIONS': 'fast_unwind_on_malloc=0:detect_leaks=1',
     'LSAN_OPTIONS': 'suppressions=@0@/lsan.supp'.format(meson.current_source_dir()),
-    'FAKE_DLCLOSE': fake_dlclose.full_path(),
     'CHECKER': checker,
   }
 
@@ -108,15 +101,19 @@ test_programs = {
   'tlsctx': ['tlsctx.c', 'util.c'],
   'tlssetkey': ['tlssetkey.c', 'util.c'],
   'tdigests': ['tdigests.c'],
+  'tdigest_dupctx': ['tdigest_dupctx.c'],
   'treadkeys': ['treadkeys.c'],
   'tcmpkeys': ['tcmpkeys.c', 'util.c'],
+  'tcachekeys': ['tcachekeys.c', 'util.c'],
   'tfork': ['tfork.c', 'util.c'],
+  'tstorepubkey': ['tstorepubkey.c', 'util.c'],
   'tpkey': ['tpkey.c', 'util.c'],
   'pincache': ['pincache.c'],
   'ccerts': ['ccerts.c', 'util.c'],
   'tecx': ['tecx.c', 'util.c'],
   'tskey-kdf': ['tskey_kdf.c', 'util.c'],
   'taead': ['taead.c', 'util.c'],
+  'loadprov': ['loadprov.c', 'util.c'],
 }
 
 test_executables = []
@@ -128,9 +125,22 @@ foreach t, sources : test_programs
   test_executables += [t]
 endforeach
 
+ec_point_test = executable(
+  'tecpoint',
+  ['tecpoint.c', '../src/obj/ec_point.c'],
+  build_by_default: false,
+  include_directories: [configinc, include_directories('../src')],
+  dependencies: [libcrypto],
+)
+
 setup_script=find_program('setup.sh')
 all_suites=['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']
-foreach suite : all_suites
+test(
+  'ec-point-decode',
+  ec_point_test,
+  suite: ['unittests'] + all_suites,
+)
+foreach suite : all_suites + ['kryoptic.multislot']
   test(
     'setup',
     setup_script,
@@ -144,6 +154,7 @@ endforeach
 
 tests = {
   'basic': {'suites': all_suites},
+  'mlkem': {'suites': ['kryoptic']},
   'mldsa': {'suites': ['kryoptic']},
   'pubkey': {'suites': all_suites},
   'certs': {'suites': all_suites},
@@ -161,18 +172,22 @@ tests = {
   'rsapss': {'suites': all_suites},
   'rsapssam': {'suites': ['softhsm', 'kryoptic']},
   'genkey': {'suites': all_suites},
+  'cachekeys': {'suites': all_suites},
   'pkey': {'suites': all_suites},
+  'pkey_provider': {'suites': ['kryoptic', 'kryoptic.nss', 'softokn']},
   'session': {'suites': all_suites},
   'skey': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
   'rand': {'suites': all_suites},
   'readkeys': {'suites': all_suites},
   'tls': {'suites': all_suites, 'is_parallel': false, 'timeout': 60},
   'tlsfuzzer': {'suites': all_suites, 'timeout': 90},
-  'uri': {'suites': all_suites, 'timeout': 90},
+  'uri': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss'], 'timeout': 90},
   'ecxc': {'suites': ['softhsm', 'kryoptic', 'kryoptic.nss']},
   'cms': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'pinlock': {'suites': ['kryoptic']},
   'aead': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
+  'op_state': {'suites': all_suites},
+  'defaultslot': {'suites': ['kryoptic.multislot']},
 }
 
 test_wrapper = find_program('test-wrapper')

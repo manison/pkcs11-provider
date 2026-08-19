@@ -24,12 +24,11 @@ struct p11prov_module_ctx {
 
     CK_INFO ck_info;
 
-    pthread_mutex_t lock;
     bool initialized;
     bool reinit;
 };
 
-/* This structure is effectively equivalent to CK_FUNCTION_LIST_3_0
+/* This structure is effectively equivalent to CK_FUNCTION_LIST_3_2
  * however we list only the symbols we are actually using in the
  * code plus flags */
 struct p11prov_interface {
@@ -96,6 +95,10 @@ struct p11prov_interface {
     CK_C_MessageDecryptFinal MessageDecryptFinal;
     CK_C_EncapsulateKey EncapsulateKey;
     CK_C_DecapsulateKey DecapsulateKey;
+    CK_C_VerifySignatureInit VerifySignatureInit;
+    CK_C_VerifySignature VerifySignature;
+    CK_C_VerifySignatureUpdate VerifySignatureUpdate;
+    CK_C_VerifySignatureFinal VerifySignatureFinal;
 };
 
 #include "interface.gen.c"
@@ -190,6 +193,10 @@ static void populate_interface(P11PROV_INTERFACE *intf, CK_INTERFACE *ck_intf)
         if (intf->version.minor >= 2) {
             ASSIGN_FN_3_2(EncapsulateKey);
             ASSIGN_FN_3_2(DecapsulateKey);
+            ASSIGN_FN_3_2(VerifySignatureInit);
+            ASSIGN_FN_3_2(VerifySignature);
+            ASSIGN_FN_3_2(VerifySignatureUpdate);
+            ASSIGN_FN_3_2(VerifySignatureFinal);
         }
     }
 }
@@ -259,7 +266,6 @@ CK_RV p11prov_module_new(P11PROV_CTX *ctx, const char *path,
 {
     struct p11prov_module_ctx *mctx;
     const char *env_module;
-    CK_RV ret;
 
     mctx = OPENSSL_zalloc(sizeof(struct p11prov_module_ctx));
     if (!mctx) {
@@ -297,12 +303,6 @@ CK_RV p11prov_module_new(P11PROV_CTX *ctx, const char *path,
         }
     }
 
-    ret = MUTEX_INIT(mctx);
-    if (ret != CKR_OK) {
-        p11prov_module_free(mctx);
-        return ret;
-    }
-
     *_mctx = mctx;
     return CKR_OK;
 }
@@ -311,22 +311,19 @@ CK_RV p11prov_module_new(P11PROV_CTX *ctx, const char *path,
 #define RTLD_DEEPBIND 0
 #endif
 
-CK_RV p11prov_module_init(P11PROV_MODULE *mctx)
+CK_RV p11prov_module_init(P11PROV_CTX *ctx)
 {
+    P11PROV_MODULE *mctx;
     P11PROV_SLOTS_CTX *slots;
     CK_C_INITIALIZE_ARGS args = { 0 };
     CK_RV ret;
 
+    mctx = p11prov_ctx_get_module(ctx);
     if (!mctx) {
+        p11prov_ctx_set_status(ctx, P11PROV_IN_ERROR);
         return CKR_GENERAL_ERROR;
     }
 
-    ret = MUTEX_LOCK(mctx);
-    if (ret != CKR_OK) {
-        return ret;
-    }
-
-    /* LOCKED SECTION ------------- */
     if (mctx->initialized) {
         ret = CKR_OK;
         goto done;
@@ -377,11 +374,14 @@ CK_RV p11prov_module_init(P11PROV_MODULE *mctx)
 
     p11prov_ctx_set_slots(mctx->provctx, slots);
 
+    p11prov_ctx_set_status(ctx, P11PROV_OPS_NEEDS_INIT);
+    mctx->initialized = true;
     ret = CKR_OK;
 
 done:
-    (void)MUTEX_UNLOCK(mctx);
-    /* ------------- LOCKED SECTION */
+    if (ret != CKR_OK) {
+        p11prov_ctx_set_status(ctx, P11PROV_IN_ERROR);
+    }
     return ret;
 }
 
@@ -415,24 +415,22 @@ void p11prov_module_mark_reinit(P11PROV_MODULE *mctx)
     mctx->reinit = true;
 }
 
-CK_RV p11prov_module_reinit(P11PROV_MODULE *mctx)
+CK_RV p11prov_module_reinit(P11PROV_CTX *ctx)
 {
+    P11PROV_MODULE *mctx;
     CK_C_INITIALIZE_ARGS args = { 0 };
     CK_INFO ck_info = { 0 };
     CK_RV ret;
 
+    mctx = p11prov_ctx_get_module(ctx);
     if (!mctx) {
+        p11prov_ctx_set_status(ctx, P11PROV_IN_ERROR);
         return CKR_GENERAL_ERROR;
     }
 
-    ret = MUTEX_LOCK(mctx);
-    if (ret != CKR_OK) {
-        return ret;
-    }
-
-    /* LOCKED SECTION ------------- */
     if (!mctx->reinit) {
         /* another thread already did it */
+        ret = CKR_OK;
         goto done;
     }
 
@@ -489,9 +487,11 @@ CK_RV p11prov_module_reinit(P11PROV_MODULE *mctx)
         ret = CKR_GENERAL_ERROR;
     }
 
+    p11prov_ctx_set_status(ctx, P11PROV_INITIALIZED);
 done:
-    (void)MUTEX_UNLOCK(mctx);
-    /* ------------- LOCKED SECTION */
+    if (ret != CKR_OK) {
+        p11prov_ctx_set_status(ctx, P11PROV_IN_ERROR);
+    }
     return ret;
 }
 

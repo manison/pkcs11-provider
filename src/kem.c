@@ -18,6 +18,8 @@ struct p11prov_kem_ctx {
 };
 typedef struct p11prov_kem_ctx P11PROV_KEM_CTX;
 
+#define DISPATCH_MLKEM_FN(name) DECL_DISPATCH_FUNC(kem, p11prov_mlkem, name)
+
 DISPATCH_MLKEM_FN(newctx);
 DISPATCH_MLKEM_FN(freectx);
 DISPATCH_MLKEM_FN(encapsulate_init);
@@ -94,8 +96,10 @@ static int p11prov_mlkem_encapsulate_init(void *vctx, void *vkey,
     P11PROV_OBJ *key = vkey;
 
     if (p11prov_obj_get_class(key) != CKO_PUBLIC_KEY) {
-        ERR_raise(ERR_LIB_PROV, PROV_R_NOT_A_PUBLIC_KEY);
-        return RET_OSSL_ERR;
+        key = p11prov_obj_pub_from_priv(key);
+        if (!key) {
+            return CKR_KEY_TYPE_INCONSISTENT;
+        }
     }
     return p11prov_mlkem_init(vctx, EVP_PKEY_OP_ENCAPSULATE, key, params);
 }
@@ -145,8 +149,8 @@ static int p11prov_mlkem_encapsulate(void *vctx, unsigned char *ct,
     size_t mlkem_ct_len, mlkem_ss_len;
     CK_OBJECT_HANDLE key_handle;
     P11PROV_SESSION *session = NULL;
+    CK_SESSION_HANDLE sess;
     CK_RV rv;
-    CK_SLOT_ID slot_id;
 
     if (ctx == NULL || ctx->key == NULL) {
         ERR_raise(ERR_LIB_PROV, PROV_R_MISSING_KEY);
@@ -186,28 +190,30 @@ static int p11prov_mlkem_encapsulate(void *vctx, unsigned char *ct,
         .ulParameterLen = 0,
     };
 
-    slot_id = p11prov_obj_get_slotid(ctx->key);
-    if (slot_id == CK_UNAVAILABLE_INFORMATION) {
-        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR,
-                      "Could not determine slot for key");
+    /* First ask for handle -- if it is mock, the pkcs11-provider will create
+     * session object */
+    key_handle = p11prov_obj_get_handle(ctx->key);
+    if (key_handle == CK_INVALID_HANDLE) {
+        P11PROV_raise(ctx->provctx, CKR_KEY_HANDLE_INVALID,
+                      "Provided key has invalid handle");
         return RET_OSSL_ERR;
     }
 
-    rv = p11prov_get_session(ctx->provctx, &slot_id, NULL, NULL, mech.mechanism,
-                             NULL, NULL, false, false, &session);
+    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, false, false,
+                                 &session);
     if (rv != CKR_OK) {
+        P11PROV_raise(ctx->provctx, rv, "Failed to acquire session");
         return RET_OSSL_ERR;
     }
+    sess = p11prov_session_handle(session);
 
     CK_OBJECT_CLASS key_class = CKO_SECRET_KEY;
     CK_KEY_TYPE key_type = CKK_GENERIC_SECRET;
-    CK_ULONG value_len = mlkem_ss_len;
     CK_BBOOL val_false = CK_FALSE;
     CK_BBOOL val_true = CK_TRUE;
     CK_ATTRIBUTE key_template[] = {
         { CKA_CLASS, &key_class, sizeof(key_class) },
         { CKA_KEY_TYPE, &key_type, sizeof(key_type) },
-        { CKA_VALUE_LEN, &value_len, sizeof(value_len) },
         { CKA_SENSITIVE, &val_false, sizeof(val_false) },
         { CKA_EXTRACTABLE, &val_true, sizeof(val_true) },
         { CKA_TOKEN, &val_false, sizeof(val_false) },
@@ -216,26 +222,22 @@ static int p11prov_mlkem_encapsulate(void *vctx, unsigned char *ct,
     CK_OBJECT_HANDLE secret_key_handle = CK_INVALID_HANDLE;
     CK_ULONG ct_len_pkcs = *ct_len;
 
-    key_handle = p11prov_obj_get_handle(ctx->key);
-
-    rv = p11prov_EncapsulateKey(
-        ctx->provctx, p11prov_session_handle(session), &mech, key_handle,
-        key_template, key_template_len, ct, &ct_len_pkcs, &secret_key_handle);
+    rv = p11prov_EncapsulateKey(ctx->provctx, sess, &mech, key_handle,
+                                key_template, key_template_len, ct,
+                                &ct_len_pkcs, &secret_key_handle);
     if (rv == CKR_OK) {
         *ct_len = ct_len_pkcs;
 
         CK_ATTRIBUTE value_attr = { CKA_VALUE, ss, *ss_len };
-        rv = p11prov_GetAttributeValue(ctx->provctx,
-                                       p11prov_session_handle(session),
-                                       secret_key_handle, &value_attr, 1);
+        rv = p11prov_GetAttributeValue(ctx->provctx, sess, secret_key_handle,
+                                       &value_attr, 1);
         if (rv == CKR_OK) {
             *ss_len = value_attr.ulValueLen;
         }
     }
 
     if (secret_key_handle != CK_INVALID_HANDLE) {
-        p11prov_DestroyObject(ctx->provctx, p11prov_session_handle(session),
-                              secret_key_handle);
+        p11prov_DestroyObject(ctx->provctx, sess, secret_key_handle);
     }
 
     p11prov_return_session(session);
@@ -256,8 +258,8 @@ static int p11prov_mlkem_decapsulate(void *vctx, unsigned char *ss,
     size_t mlkem_ct_len, mlkem_ss_len;
     CK_OBJECT_HANDLE key_handle;
     P11PROV_SESSION *session = NULL;
+    CK_SESSION_HANDLE sess;
     CK_RV rv;
-    CK_SLOT_ID slot_id;
 
     if (ctx == NULL || ctx->key == NULL) {
         ERR_raise(ERR_LIB_PROV, PROV_R_MISSING_KEY);
@@ -289,28 +291,30 @@ static int p11prov_mlkem_decapsulate(void *vctx, unsigned char *ss,
         .ulParameterLen = 0,
     };
 
-    slot_id = p11prov_obj_get_slotid(ctx->key);
-    if (slot_id == CK_UNAVAILABLE_INFORMATION) {
-        P11PROV_raise(ctx->provctx, CKR_GENERAL_ERROR,
-                      "Could not determine slot for key");
+    /* First ask for handle -- if it is mock, the pkcs11-provider will create
+     * session object */
+    key_handle = p11prov_obj_get_handle(ctx->key);
+    if (key_handle == CK_INVALID_HANDLE) {
+        P11PROV_raise(ctx->provctx, CKR_KEY_HANDLE_INVALID,
+                      "Provided key has invalid handle");
         return RET_OSSL_ERR;
     }
 
-    rv = p11prov_get_session(ctx->provctx, &slot_id, NULL, NULL, mech.mechanism,
-                             NULL, NULL, false, false, &session);
+    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, false, false,
+                                 &session);
     if (rv != CKR_OK) {
+        P11PROV_raise(ctx->provctx, rv, "Failed to acquire session");
         return RET_OSSL_ERR;
     }
+    sess = p11prov_session_handle(session);
 
     CK_OBJECT_CLASS key_class = CKO_SECRET_KEY;
     CK_KEY_TYPE key_type = CKK_GENERIC_SECRET;
-    CK_ULONG value_len = mlkem_ss_len;
     CK_BBOOL val_false = CK_FALSE;
     CK_BBOOL val_true = CK_TRUE;
     CK_ATTRIBUTE key_template[] = {
         { CKA_CLASS, &key_class, sizeof(key_class) },
         { CKA_KEY_TYPE, &key_type, sizeof(key_type) },
-        { CKA_VALUE_LEN, &value_len, sizeof(value_len) },
         { CKA_SENSITIVE, &val_false, sizeof(val_false) },
         { CKA_EXTRACTABLE, &val_true, sizeof(val_true) },
         { CKA_TOKEN, &val_false, sizeof(val_false) },
@@ -320,24 +324,21 @@ static int p11prov_mlkem_decapsulate(void *vctx, unsigned char *ss,
 
     key_handle = p11prov_obj_get_handle(ctx->key);
 
-    rv = p11prov_DecapsulateKey(ctx->provctx, p11prov_session_handle(session),
-                                &mech, key_handle, key_template,
-                                key_template_len, (CK_BYTE_PTR)ct, ct_len,
-                                &secret_key_handle);
+    rv = p11prov_DecapsulateKey(ctx->provctx, sess, &mech, key_handle,
+                                key_template, key_template_len, (CK_BYTE_PTR)ct,
+                                ct_len, &secret_key_handle);
 
     if (rv == CKR_OK) {
         CK_ATTRIBUTE value_attr = { CKA_VALUE, ss, *ss_len };
-        rv = p11prov_GetAttributeValue(ctx->provctx,
-                                       p11prov_session_handle(session),
-                                       secret_key_handle, &value_attr, 1);
+        rv = p11prov_GetAttributeValue(ctx->provctx, sess, secret_key_handle,
+                                       &value_attr, 1);
         if (rv == CKR_OK) {
             *ss_len = value_attr.ulValueLen;
         }
     }
 
     if (secret_key_handle != CK_INVALID_HANDLE) {
-        p11prov_DestroyObject(ctx->provctx, p11prov_session_handle(session),
-                              secret_key_handle);
+        p11prov_DestroyObject(ctx->provctx, sess, secret_key_handle);
     }
 
     p11prov_return_session(session);
@@ -353,7 +354,9 @@ static int p11prov_mlkem_decapsulate(void *vctx, unsigned char *ss,
 static int p11prov_mlkem_set_ctx_params(void *vctx, const OSSL_PARAM params[])
 {
     P11PROV_KEM_CTX *ctx = vctx;
+#ifdef OSSL_KEM_PARAM_IKME
     const OSSL_PARAM *p;
+#endif
 
     if (ctx == NULL || params == NULL) {
         return RET_OSSL_OK;
@@ -378,7 +381,10 @@ p11prov_mlkem_settable_ctx_params(ossl_unused void *vctx,
     return settable;
 }
 
-const OSSL_DISPATCH p11prov_mlkem_kem_functions[] = {
+#define DISPATCH_MLKEM_ELEM(prefix, NAME, name) \
+    { OSSL_FUNC_KEM_##NAME, (void (*)(void))p11prov_##prefix##_##name }
+
+const OSSL_DISPATCH p11prov_mlkem_functions[] = {
     DISPATCH_MLKEM_ELEM(mlkem, NEWCTX, newctx),
     DISPATCH_MLKEM_ELEM(mlkem, FREECTX, freectx),
     DISPATCH_MLKEM_ELEM(mlkem, ENCAPSULATE_INIT, encapsulate_init),
@@ -389,3 +395,52 @@ const OSSL_DISPATCH p11prov_mlkem_kem_functions[] = {
     DISPATCH_MLKEM_ELEM(mlkem, SETTABLE_CTX_PARAMS, settable_ctx_params),
     { 0, NULL },
 };
+
+enum p11prov_kem_algorithms {
+    P11PROV_KEM_ML_KEM_512,
+    P11PROV_KEM_ML_KEM_768,
+    P11PROV_KEM_ML_KEM_1024,
+    P11PROV_KEM_NUM_ALGS
+};
+
+const OSSL_ALGORITHM kem_algorithms[P11PROV_KEM_NUM_ALGS] = {
+    [P11PROV_KEM_ML_KEM_512] =
+        DEFAULT_ALGORITHM(ML_KEM_512, p11prov_mlkem_functions),
+    [P11PROV_KEM_ML_KEM_768] =
+        DEFAULT_ALGORITHM(ML_KEM_768, p11prov_mlkem_functions),
+    [P11PROV_KEM_ML_KEM_1024] =
+        DEFAULT_ALGORITHM(ML_KEM_1024, p11prov_mlkem_functions),
+};
+
+CK_RV p11prov_register_kems(P11PROV_CTX *ctx, bool mechs[TBID_SIZE],
+                            bool fips_property)
+{
+    const char *property = NULL;
+    OSSL_ALGORITHM *algs =
+        OPENSSL_zalloc(sizeof(OSSL_ALGORITHM) * (P11PROV_KEM_NUM_ALGS + 1));
+    int i = 0;
+
+    if (algs == NULL) {
+        return CKR_HOST_MEMORY;
+    }
+
+    if (fips_property) {
+        property = P11PROV_FIPS_PROPERTIES;
+    }
+
+    if (mechs[TBID_ML_KEM]) {
+        p11prov_assign_alg(&algs[i++], kem_algorithms, P11PROV_KEM_ML_KEM_512,
+                           property);
+        p11prov_assign_alg(&algs[i++], kem_algorithms, P11PROV_KEM_ML_KEM_768,
+                           property);
+        p11prov_assign_alg(&algs[i++], kem_algorithms, P11PROV_KEM_ML_KEM_1024,
+                           property);
+    }
+
+    if (i == 0) {
+        OPENSSL_free(algs);
+        algs = NULL;
+    }
+
+    return p11prov_ctx_add_algs(ctx, OSSL_OP_KEM, algs);
+}

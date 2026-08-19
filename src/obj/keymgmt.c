@@ -2,6 +2,8 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "obj/internal.h"
+#include "obj/ec_point.h"
+#include "kmgmt/keymgmt.h"
 
 bool p11prov_obj_is_rsa_pss(P11PROV_OBJ *obj)
 {
@@ -291,12 +293,10 @@ done:
 }
 
 CK_RV decode_ec_point(P11PROV_CTX *provctx, CK_KEY_TYPE key_type,
-                      CK_ATTRIBUTE *attr, struct data_buffer *ec_point)
+                      CK_ULONG expected_size, CK_ATTRIBUTE *attr,
+                      struct data_buffer *ec_point)
 {
-    ASN1_OCTET_STRING *octet;
-    const unsigned char *val;
-    CK_RV ret = CKR_GENERAL_ERROR;
-    int err;
+    CK_RV ret;
 
     /* Some of the ASN.1 operation may leave errors on the stack
      * which cause TLS operation to fail even if they are benign
@@ -304,54 +304,14 @@ CK_RV decode_ec_point(P11PROV_CTX *provctx, CK_KEY_TYPE key_type,
      * stack if we want to ignore an error */
     p11prov_set_error_mark(provctx);
 
-    /* in d2i functions 'in' is overwritten to return the remainder of
-     * the buffer after parsing, so we always need to avoid passing in
-     * our pointer holders, to avoid having them clobbered */
-    val = attr->pValue;
-    octet = d2i_ASN1_OCTET_STRING(NULL, (const unsigned char **)&val,
-                                  attr->ulValueLen);
-    if (!octet) {
-        /* 3.1 spec says CKA_EC_POINT is not DER encoded for Edwards and
-         * Montgomery curves so do not fail in that case and just take
-         * the value as is */
-        if (key_type == CKK_EC) {
-            ret = CKR_KEY_INDIGESTIBLE;
-            goto done;
-        } else {
-            octet = ASN1_OCTET_STRING_new();
-            if (!octet) {
-                ret = CKR_HOST_MEMORY;
-                goto done;
-            }
-            /* makes a copy of the value */
-            err = ASN1_OCTET_STRING_set(octet, attr->pValue, attr->ulValueLen);
-            if (err != RET_OSSL_OK) {
-                ret = CKR_HOST_MEMORY;
-                goto done;
-            }
-        }
-    }
-
-    ec_point->data =
-        OPENSSL_memdup(ASN1_STRING_get0_data(octet), ASN1_STRING_length(octet));
-    if (!ec_point->data) {
-        ret = CKR_HOST_MEMORY;
-        ec_point->length = 0;
-        goto done;
-    }
-    ec_point->length = ASN1_STRING_length(octet);
-
-    ret = CKR_OK;
-done:
+    ret = p11prov_decode_ec_point_value(key_type, expected_size, attr,
+                                        &ec_point->data, &ec_point->length);
     if (ret == CKR_OK) {
         /* we want to ignore decoding errors in this case */
         p11prov_pop_error_to_mark(provctx);
     } else {
         /* we want to leave errors in this case */
         p11prov_clear_last_error_mark(provctx);
-    }
-    if (octet) {
-        ASN1_OCTET_STRING_free(octet);
     }
     return ret;
 }
@@ -376,8 +336,8 @@ CK_ATTRIBUTE *p11prov_obj_get_ec_public_raw(P11PROV_OBJ *key)
             void *tmp_ptr;
             CK_RV ret;
 
-            ret =
-                decode_ec_point(key->ctx, key->data.key.type, ec_point, &data);
+            ret = decode_ec_point(key->ctx, key->data.key.type,
+                                  key->data.key.size, ec_point, &data);
             if (ret != CKR_OK) {
                 P11PROV_raise(key->ctx, ret, "Failed to decode EC_POINT");
                 return NULL;
@@ -930,6 +890,14 @@ const CK_BYTE x448_oid[] = { X448_OID };
 const CK_BYTE ed25519_oid[] = { ED25519_OID };
 const CK_BYTE ed448_oid[] = { ED448_OID };
 
+/* Thales Luna HSM OIDs */
+#define ED25519_LUNA \
+    0x06, 0x09, 0x2B, 0x06, 0x01, 0x04, 0x01, 0xDA, 0x47, 0x0F, 0x01
+#define X25519_LUNA \
+    0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x95, 0x55, 0x01, 0x05, 0x01
+const CK_BYTE ed25519_luna[] = { ED25519_LUNA };
+const CK_BYTE x25519_luna[] = { X25519_LUNA };
+
 struct match_curve {
     const CK_BYTE *params;
     CK_ULONG params_len;
@@ -948,6 +916,8 @@ struct match_curve ed_params_table[] = {
       ED25519_BIT_SIZE, ED25519_BYTE_SIZE },
     { ed448_ec_params, sizeof(ed448_ec_params), ED448, NID_ED448,
       ED448_BIT_SIZE, ED448_BYTE_SIZE },
+    { ed25519_luna, sizeof(ed25519_luna), ED25519, NID_ED25519,
+      ED25519_BIT_SIZE, ED25519_BYTE_SIZE },
 };
 
 struct match_curve x_params_table[] = {
@@ -959,6 +929,8 @@ struct match_curve x_params_table[] = {
       X25519_BIT_SIZE, X25519_BYTE_SIZE },
     { x448_ec_params, sizeof(x448_ec_params), X448_NAME, NID_X448,
       X448_BIT_SIZE, X448_BYTE_SIZE },
+    { x25519_luna, sizeof(x25519_luna), X25519_NAME, NID_X25519,
+      X25519_BIT_SIZE, X25519_BYTE_SIZE },
 };
 
 CK_RV p11prov_match_curve(CK_KEY_TYPE type, CK_ATTRIBUTE *attr,

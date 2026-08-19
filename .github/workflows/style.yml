@@ -17,7 +17,7 @@ jobs:
                 git openssl-devel clang-tools-extra \
                 python3-pip codespell
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup
         if: ${{ github.event.pull_request.base.sha }}
         run: |

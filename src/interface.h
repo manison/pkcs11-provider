@@ -15,11 +15,11 @@
 /* interface declarations for PKCS#11 wrapper functions */
 CK_RV p11prov_module_new(P11PROV_CTX *ctx, const char *path,
                          const char *init_args, P11PROV_MODULE **_mctx);
-CK_RV p11prov_module_init(P11PROV_MODULE *mctx);
+CK_RV p11prov_module_init(P11PROV_CTX *ctx);
 P11PROV_INTERFACE *p11prov_module_get_interface(P11PROV_MODULE *mctx);
 void p11prov_module_free(P11PROV_MODULE *mctx);
 void p11prov_module_mark_reinit(P11PROV_MODULE *mctx);
-CK_RV p11prov_module_reinit(P11PROV_MODULE *mctx);
+CK_RV p11prov_module_reinit(P11PROV_CTX *ctx);
 CK_RV p11prov_Initialize(P11PROV_CTX *ctx, CK_VOID_PTR pInitArgs);
 CK_RV p11prov_Finalize(P11PROV_CTX *ctx, CK_VOID_PTR pReserved);
 CK_RV p11prov_GetInfo(P11PROV_CTX *ctx, CK_INFO_PTR pInfo);
@@ -202,6 +202,17 @@ CK_RV p11prov_DecapsulateKey(P11PROV_CTX *ctx, CK_SESSION_HANDLE hSession,
                              CK_ULONG ulAttributeCount, CK_BYTE_PTR pCiphertext,
                              CK_ULONG ulCiphertextLen,
                              CK_OBJECT_HANDLE_PTR phKey);
+CK_RV p11prov_VerifySignatureInit(P11PROV_CTX *ctx, CK_SESSION_HANDLE hSession,
+                                  CK_MECHANISM_PTR pMechanism,
+                                  CK_OBJECT_HANDLE hKey, CK_BYTE_PTR pSignature,
+                                  CK_ULONG ulSignatureLen);
+CK_RV p11prov_VerifySignature(P11PROV_CTX *ctx, CK_SESSION_HANDLE hSession,
+                              CK_BYTE_PTR pData, CK_ULONG ulDataLen);
+CK_RV p11prov_VerifySignatureUpdate(P11PROV_CTX *ctx,
+                                    CK_SESSION_HANDLE hSession,
+                                    CK_BYTE_PTR pPart, CK_ULONG ulPartLen);
+CK_RV p11prov_VerifySignatureFinal(P11PROV_CTX *ctx,
+                                   CK_SESSION_HANDLE hSession);
 
 /* Special side-channel free path against PKCS#1 1.5 side channel leaking */
 CK_RV side_channel_free_Decrypt(P11PROV_CTX *ctx, CK_SESSION_HANDLE hSession,
@@ -283,5 +294,9 @@ CK_INFO p11prov_module_ck_info(P11PROV_MODULE *mctx);
 #define P11PROV_BLOCK_MessageDecryptFinal 0b0000000000000000
 #define P11PROV_BLOCK_EncapsulateKey 0b0000000000000000
 #define P11PROV_BLOCK_DecapsulateKey 0b0000000000000000
+#define P11PROV_BLOCK_VerifySignatureInit 0b0000000000000000
+#define P11PROV_BLOCK_VerifySignature 0b0000000000000000
+#define P11PROV_BLOCK_VerifySignatureUpdate 0b0000000000000000
+#define P11PROV_BLOCK_VerifySignatureFinal 0b0000000000000000
 
 #endif /* _INTERFACE_H */

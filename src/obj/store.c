@@ -176,14 +176,11 @@ static CK_RV prep_ec_find(P11PROV_CTX *ctx, const OSSL_PARAM params[],
         goto done;
     }
 
-    curve_nid = EC_GROUP_get_curve_name(group);
-    if (curve_nid != NID_undef) {
-        curve_name = OSSL_EC_curve_nid2name(curve_nid);
-        if (!curve_name) {
-            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
-            rv = CKR_KEY_INDIGESTIBLE;
-            goto done;
-        }
+    curve_name = p11prov_ec_group_to_curve_name(group, &curve_nid);
+    if (curve_name == NULL && curve_nid != NID_undef) {
+        P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
     }
 
     ecplen = i2d_ECPKParameters(group, &ecparams);
@@ -1801,14 +1798,11 @@ static CK_RV import_ec_params(P11PROV_OBJ *key, const OSSL_PARAM params[])
         goto done;
     }
 
-    curve_nid = EC_GROUP_get_curve_name(group);
-    if (curve_nid != NID_undef) {
-        curve_name = OSSL_EC_curve_nid2name(curve_nid);
-        if (!curve_name) {
-            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
-            rv = CKR_KEY_INDIGESTIBLE;
-            goto done;
-        }
+    curve_name = p11prov_ec_group_to_curve_name(group, &curve_nid);
+    if (curve_name == NULL && curve_nid != NID_undef) {
+        P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Unknown curve");
+        rv = CKR_KEY_INDIGESTIBLE;
+        goto done;
     }
 
     len = i2d_ECPKParameters(group, &ecparams);

@@ -76,6 +76,16 @@
     <ClCompile Include="src\kmgmt\rsa.c">
       <Filter>kmgmt</Filter>
     </ClCompile>
+    <ClCompile Include="src\kmgmt\slhdsa.c">
+      <Filter>kmgmt</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obj\ec_point.c">
+      <Filter>obj</Filter>
+    </ClCompile>
+    <ClCompile Include="src\registration.c" />
+    <ClCompile Include="src\sig\slhdsa.c">
+      <Filter>sig</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\asymmetric_cipher.h" />
@@ -129,6 +139,10 @@
     <ClInclude Include="src\kmgmt\skey.h">
       <Filter>kmgmt</Filter>
     </ClInclude>
+    <ClInclude Include="src\obj\ec_point.h">
+      <Filter>obj</Filter>
+    </ClInclude>
+    <ClInclude Include="src\registration.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">

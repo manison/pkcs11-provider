@@ -4,6 +4,11 @@
 #ifndef _SIG_INTERNAL_H
 #define _SIG_INTERNAL_H
 
+#include "sig/signature.h"
+
+struct p11prov_sig_ctx;
+typedef struct p11prov_sig_ctx P11PROV_SIG_CTX;
+
 enum instance {
     ED_Unset = 0,
     ED_25519,
@@ -38,9 +43,10 @@ struct p11prov_sig_ctx {
     CK_EDDSA_PARAMS eddsa_params;
     CK_BBOOL use_eddsa_params;
 
-    /* ML-DSA param data */
+    /* ML-DSA & SLH-DSA param data */
     CK_ML_DSA_PARAMETER_SET_TYPE mldsa_paramset;
-    CK_SIGN_ADDITIONAL_CONTEXT mldsa_params;
+    CK_SLH_DSA_PARAMETER_SET_TYPE slhdsa_paramset;
+    CK_SIGN_ADDITIONAL_CONTEXT additional_context;
 
     /* Signature to be verified, used by verify_message_final() */
     unsigned char *signature;
@@ -58,6 +64,9 @@ struct p11prov_sig_ctx {
      * separately and then applying a raw signature on the result. */
     EVP_MD_CTX *fallback_digest;
     p11prov_sig_operate_t *fallback_operate;
+
+    /* Whether C_VerifySignature* APIs are in use */
+    bool verify_signature;
 };
 
 P11PROV_SIG_CTX *p11prov_sig_newctx(P11PROV_CTX *ctx, CK_MECHANISM_TYPE type,
@@ -105,5 +114,55 @@ int p11prov_sig_digest_final(P11PROV_SIG_CTX *sigctx, unsigned char *sig,
 /* ... csor(3) nistAlgorithms(4) sigAlgs(3) */
 #define DER_NIST_SIGALGS DER_NIST_ALGS, 0x03
 #define DER_NIST_SIGALGS_LEN (DER_NIST_ALGS_LEN + 1)
+
+#define DISPATCH_SIG_ELEM(prefix, NAME, name) \
+    { OSSL_FUNC_SIGNATURE_##NAME, (void (*)(void))p11prov_##prefix##_##name }
+
+extern const OSSL_DISPATCH p11prov_rsa_functions[];
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+extern const OSSL_DISPATCH p11prov_rsa_sha1_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha224_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha256_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha384_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha512_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha3_224_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha3_256_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha3_384_functions[];
+extern const OSSL_DISPATCH p11prov_rsa_sha3_512_functions[];
+#endif
+extern const OSSL_DISPATCH p11prov_ecdsa_functions[];
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+extern const OSSL_DISPATCH p11prov_ecdsa_sha1_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha224_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha256_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha384_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha512_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha3_224_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha3_256_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha3_384_functions[];
+extern const OSSL_DISPATCH p11prov_ecdsa_sha3_512_functions[];
+#endif
+extern const OSSL_DISPATCH p11prov_ed25519_functions[];
+extern const OSSL_DISPATCH p11prov_ed448_functions[];
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+extern const OSSL_DISPATCH p11prov_ed25519ph_functions[];
+extern const OSSL_DISPATCH p11prov_ed25519ctx_functions[];
+extern const OSSL_DISPATCH p11prov_ed448ph_functions[];
+#endif
+extern const OSSL_DISPATCH p11prov_mldsa_44_functions[];
+extern const OSSL_DISPATCH p11prov_mldsa_65_functions[];
+extern const OSSL_DISPATCH p11prov_mldsa_87_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_128s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_128s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_128f_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_128f_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_192s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_192s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_192f_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_192f_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_256s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_256s_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_sha2_256f_functions[];
+extern const OSSL_DISPATCH p11prov_slhdsa_shake_256f_functions[];
 
 #endif /* _SIG_INTERNAL_H */

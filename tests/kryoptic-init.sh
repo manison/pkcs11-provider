@@ -8,7 +8,7 @@ find_kryoptic() {
     for _lib in "$@" ; do
         if test -f "$_lib" ; then
             echo "Using kryoptic path $_lib"
-            P11LIB="$_lib"
+            export P11LIB="${_lib}"
             return
         fi
     done
@@ -26,10 +26,12 @@ find_kryoptic \
 
 title LINE "Creating Kryoptic database"
 
+SLOTID=${SLOTID:-0}
+
 # Kryoptic configuration
 cat << EOF > "$TOKDIR/kryoptic.conf"
 [[slots]]
-slot = 0
+slot = $SLOTID
 dbtype = "sqlite"
 dbargs = "$TOKDIR/kryoptic.sql"
 #mechanisms
@@ -40,14 +42,14 @@ export TOKENLABEL="${TOKENLABEL:-Kryoptic Token}"
 export TOKENLABELURI="${TOKENLABELURI:-Kryoptic%20Token}"
 
 # init token
-pkcs11-tool --module "${P11LIB}" --init-token \
-    --label "${TOKENLABEL}" --so-pin "${PINVALUE}" 2>&1
+ptool --init-token --slot "${SLOTID}" --label "${TOKENLABEL}" \
+      --so-pin "${PINVALUE}" 2>&1
 # set user pin
-pkcs11-tool --module "${P11LIB}" --so-pin "${PINVALUE}" \
-    --login --login-type so --init-pin --pin "${PINVALUE}" 2>&1
+ptool --so-pin "${PINVALUE}" --slot "${SLOTID}" --login --login-type so \
+      --init-pin --pin "${PINVALUE}" 2>&1
 
 export TOKENCONFIGVARS="export KRYOPTIC_CONF=$TOKDIR/kryoptic.conf"
-
+export TOKENOPTIONS="${TOKENOPTIONS}\npkcs11-module-quirks =  "
 export TESTPORT="34000"
 
 export SUPPORT_ALLOWED_MECHANISMS=1
@@ -59,4 +61,21 @@ fi
 # Enable SUPPORT_ML_KEM as long as it is not set already.
 if [ -z "$SUPPORT_ML_KEM" ]; then
     export SUPPORT_ML_KEM=1
+fi
+# Enable SUPPORT_SLH_DSA as long as it is not set already.
+if [ -z "$SUPPORT_SLH_DSA" ]; then
+    export SUPPORT_SLH_DSA=1
+fi
+
+# In theory Kryoptic could be statically linked to a version of OpenSSL that
+# does support serializing contexts, even though the system as whole does
+# not. In that case op_state test will "unexpectedly" succeed, and will need
+# to be masked or adjusted.
+if ldd "$P11LIB" | grep -q "libcrypto.so.4"; then
+    export SUPPORT_OPERATION_STATE=1
+elif ldd "$P11LIB" | grep -q "libcrypto.so.3"; then
+    export SUPPORT_OPERATION_STATE=0
+else
+    # assumes this is a static build using openssl4
+    export SUPPORT_OPERATION_STATE=1
 fi

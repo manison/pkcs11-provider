@@ -63,7 +63,7 @@ static void check_ec_key(EVP_PKEY *pubkey)
     }
 }
 
-static void check_eddsa_key(EVP_PKEY *pubkey)
+static void check_public_key(EVP_PKEY *pubkey)
 {
     unsigned char *tmp = NULL;
     size_t len = 0;
@@ -136,8 +136,10 @@ static void check_keys(OSSL_STORE_CTX *store, const char *key_type)
     } else if (strcmp(key_type, "EC") == 0) {
         check_ec_key(pubkey);
     } else if (strcmp(key_type, "ED25519") == 0
-               || strcmp(key_type, "ED448") == 0) {
-        check_eddsa_key(pubkey);
+               || strcmp(key_type, "ED448") == 0
+               || strcmp(key_type, "ML-DSA") == 0
+               || strcmp(key_type, "ML-KEM") == 0) {
+        check_public_key(pubkey);
     }
 
     EVP_PKEY_free(privkey);
@@ -194,8 +196,11 @@ static void gen_keys(const char *key_type, const char *label, const char *idhex,
     } else if (strcmp(key_type, "EC") == 0) {
         check_ec_key(key);
     } else if (strcmp(key_type, "ED25519") == 0
-               || strcmp(key_type, "ED448") == 0) {
-        check_eddsa_key(key);
+               || strcmp(key_type, "ED448") == 0
+               || strncmp(key_type, "ML-DSA", 6) == 0
+               || strncmp(key_type, "ML-KEM", 6) == 0
+               || strncmp(key_type, "SLH-DSA", 7) == 0) {
+        check_public_key(key);
     }
 
     EVP_PKEY_free(key);
@@ -643,6 +648,64 @@ int main(int argc, char *argv[])
             const char *context = "context string";
 
             ret = asprintf(&label, "Test-ML-DSA-gen-%08x", miniid);
+            if (ret == -1) {
+                PRINTERR("Failed to make label\n");
+                exit(EXIT_FAILURE);
+            }
+            ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+            if (ret == -1) {
+                PRINTERR("Failed to compose PKCS#11 URI\n");
+                exit(EXIT_FAILURE);
+            }
+            params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+            params[1] = OSSL_PARAM_construct_end();
+
+            gen_keys(tests[num], label, idhex, params, false);
+
+            sign_test(label, NULL, NULL, false);
+
+/* these are not defined in OpenSSL 3.5 so just skip the test */
+#if defined(OSSL_FUNC_SIGNATURE_SIGN_MESSAGE_INIT)
+            sign35_test(tests[num], label, NULL, false);
+
+            /* Test again with context string */
+            params[0] = OSSL_PARAM_construct_octet_string(
+                OSSL_SIGNATURE_PARAM_CONTEXT_STRING, (void *)context,
+                sizeof(context));
+            params[1] = OSSL_PARAM_construct_end();
+
+            sign_test(label, NULL, NULL, false);
+            sign35_test(tests[num], label, params, false);
+#else
+            (void)context;
+#endif
+
+            free(label);
+            free(uri);
+        } else if (strncmp(tests[num], "ML-KEM", 6) == 0) {
+            ret = asprintf(&label, "Test-ML-KEM-gen-%08x", miniid);
+            if (ret == -1) {
+                PRINTERR("Failed to make label\n");
+                exit(EXIT_FAILURE);
+            }
+            ret = asprintf(&uri, "pkcs11:object=%s;id=%s", label, idhex);
+            if (ret == -1) {
+                PRINTERR("Failed to compose PKCS#11 URI\n");
+                exit(EXIT_FAILURE);
+            }
+            params[0] = OSSL_PARAM_construct_utf8_string("pkcs11_uri", uri, 0);
+            params[1] = OSSL_PARAM_construct_end();
+
+            gen_keys(tests[num], label, idhex, params, false);
+
+            // TODO encapsulate/decapsulate?
+
+            free(label);
+            free(uri);
+        } else if (strncmp(tests[num], "SLH-DSA", 7) == 0) {
+            const char *context = "context string";
+
+            ret = asprintf(&label, "Test-SLH-DSA-gen-%08x", miniid);
             if (ret == -1) {
                 PRINTERR("Failed to make label\n");
                 exit(EXIT_FAILURE);

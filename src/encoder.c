@@ -2,10 +2,26 @@
    SPDX-License-Identifier: Apache-2.0 */
 
 #include "provider.h"
+#include "encoder.h"
 #include "pk11_uri.h"
 #include <openssl/asn1t.h>
 #include <openssl/pem.h>
 #include <openssl/bio.h>
+
+#define DISPATCH_TEXT_ENCODER_ELEM(NAME, type, name) \
+    { OSSL_FUNC_ENCODER_##NAME, \
+      (void (*)(void))p11prov_##type##_encoder_##name }
+#define DISPATCH_BASE_ENCODER_FN(name) \
+    DECL_DISPATCH_FUNC(encoder, p11prov_encoder, name)
+#define DISPATCH_BASE_ENCODER_ELEM(NAME, name) \
+    { OSSL_FUNC_ENCODER_##NAME, (void (*)(void))p11prov_encoder_##name }
+#define DISPATCH_ENCODER_FN(type, structure, format, name) \
+    DECL_DISPATCH_FUNC(encoder, \
+                       p11prov_##type##_encoder_##structure##_##format, name)
+#define DISPATCH_ENCODER_ELEM(NAME, type, structure, format, name) \
+    { OSSL_FUNC_ENCODER_##NAME, \
+      (void (*)( \
+          void))p11prov_##type##_encoder_##structure##_##format##_##name }
 
 static int p11prov_print_bn(BIO *out, const OSSL_PARAM *p, const char *str,
                             int indent)
@@ -131,6 +147,35 @@ static const char *p11prov_key_type_name(P11PROV_OBJ *key)
             return "ML-KEM-1024";
         }
         break;
+    case CKK_SLH_DSA:
+        subtype = p11prov_obj_get_key_param_set(key);
+        switch (subtype) {
+        case CKP_SLH_DSA_SHA2_128S:
+            return "SLH-DSA-SHA2-128S";
+        case CKP_SLH_DSA_SHA2_128F:
+            return "SLH-DSA-SHA2-128F";
+        case CKP_SLH_DSA_SHA2_192S:
+            return "SLH-DSA-SHA2-192S";
+        case CKP_SLH_DSA_SHA2_192F:
+            return "SLH-DSA-SHA2-192F";
+        case CKP_SLH_DSA_SHA2_256S:
+            return "SLH-DSA-SHA2-256S";
+        case CKP_SLH_DSA_SHA2_256F:
+            return "SLH-DSA-SHA2-256F";
+        case CKP_SLH_DSA_SHAKE_128S:
+            return "SLH-DSA-SHAKE-128S";
+        case CKP_SLH_DSA_SHAKE_128F:
+            return "SLH-DSA-SHAKE-128F";
+        case CKP_SLH_DSA_SHAKE_192S:
+            return "SLH-DSA-SHAKE-192S";
+        case CKP_SLH_DSA_SHAKE_192F:
+            return "SLH-DSA-SHAKE-192F";
+        case CKP_SLH_DSA_SHAKE_256S:
+            return "SLH-DSA-SHAKE-256S";
+        case CKP_SLH_DSA_SHAKE_256F:
+            return "SLH-DSA-SHAKE-256F";
+        }
+        break;
     }
     return NULL;
 }
@@ -177,6 +222,9 @@ CK_RV rsa_pkeyinfo_to_attrs(CK_ATTRIBUTE *pkeyinfo, CK_ATTRIBUTE *attrs)
     CK_RV rv = CKR_GENERAL_ERROR;
 
     rsakey = decode_rsa_pubkey(pkeyinfo);
+    if (!rsakey) {
+        return CKR_KEY_INDIGESTIBLE;
+    }
 
     n = ASN1_INTEGER_to_BN(rsakey->n, NULL);
     e = ASN1_INTEGER_to_BN(rsakey->e, NULL);
@@ -223,6 +271,7 @@ done:
 int p11prov_rsa_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key);
 int p11prov_ec_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key);
 int p11prov_mldsa_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key);
+int p11prov_slhdsa_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key);
 int p11prov_mlkem_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key);
 
 static X509_PUBKEY *p11prov_pubkey_to_x509(P11PROV_OBJ *key)
@@ -248,6 +297,9 @@ static X509_PUBKEY *p11prov_pubkey_to_x509(P11PROV_OBJ *key)
         break;
     case CKK_ML_DSA:
         ret = p11prov_mldsa_pubkey_to_x509(pubkey, key);
+        break;
+    case CKK_SLH_DSA:
+        ret = p11prov_slhdsa_pubkey_to_x509(pubkey, key);
         break;
     case CKK_ML_KEM:
         ret = p11prov_mlkem_pubkey_to_x509(pubkey, key);
@@ -457,17 +509,18 @@ static int p11prov_print_pkeyinfo(CK_ATTRIBUTE *pkeyinfo, BIO *out)
 
             group = d2i_ECPKParameters(NULL, &pm, pmlen);
             if (group) {
-                nid = EC_GROUP_get_curve_name(group);
-                if (nid != NID_undef) {
-                    const char *name;
-                    BIO_printf(out, "ASN1 OID: %s\n", OBJ_nid2sn(nid));
-                    name = OSSL_EC_curve_nid2name(nid);
+                const char *name;
+                name = p11prov_ec_group_to_curve_name(group, &nid);
+                if (name == NULL && nid == NID_undef) {
+                    nid = EC_GROUP_get_field_type(group);
+                    BIO_printf(out, "FIELD TYPE: %s\n", OBJ_nid2sn(nid));
+                } else {
+                    if (nid != NID_undef) {
+                        BIO_printf(out, "ASN1 OID: %s\n", OBJ_nid2sn(nid));
+                    }
                     if (name) {
                         BIO_printf(out, "CURVE NAME: %s\n", name);
                     }
-                } else {
-                    nid = EC_GROUP_get_field_type(group);
-                    BIO_printf(out, "FIELD TYPE: %s\n", OBJ_nid2sn(nid));
                 }
                 EC_GROUP_free(group);
             } else {
@@ -498,6 +551,18 @@ static int p11prov_print_pkeyinfo(CK_ATTRIBUTE *pkeyinfo, BIO *out)
 #ifdef NID_ML_KEM_512
     else if (nid == NID_ML_KEM_512 || nid == NID_ML_KEM_768
              || nid == NID_ML_KEM_1024) {
+        BIO_printf(out, "Pub:\n");
+        ret = ASN1_buf_print(out, pk, pklen, 4);
+    }
+#endif
+#ifdef NID_SLH_DSA_SHA2_128s
+    else if (nid == NID_SLH_DSA_SHA2_128s || nid == NID_SLH_DSA_SHA2_128f
+             || nid == NID_SLH_DSA_SHA2_192s || nid == NID_SLH_DSA_SHA2_192f
+             || nid == NID_SLH_DSA_SHA2_256s || nid == NID_SLH_DSA_SHA2_256f
+             || nid == NID_SLH_DSA_SHAKE_128s || nid == NID_SLH_DSA_SHAKE_128f
+             || nid == NID_SLH_DSA_SHAKE_192s || nid == NID_SLH_DSA_SHAKE_192f
+             || nid == NID_SLH_DSA_SHAKE_256s
+             || nid == NID_SLH_DSA_SHAKE_256f) {
         BIO_printf(out, "Pub:\n");
         ret = ASN1_buf_print(out, pk, pklen, 4);
     }
@@ -1389,6 +1454,147 @@ const OSSL_DISPATCH p11prov_mldsa_encoder_text_functions[] = {
     { 0, NULL },
 };
 
+/* SLH-DSA */
+
+struct slhdsa_key_point {
+    unsigned char *octet;
+    size_t len;
+};
+
+#ifdef NID_SLH_DSA_SHA2_128s
+static int p11prov_slhdsa_set_keypoint_data(const OSSL_PARAM *params, void *key)
+{
+    struct slhdsa_key_point *keypoint = (struct slhdsa_key_point *)key;
+    const OSSL_PARAM *p;
+
+    p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PUB_KEY);
+    if (!p) {
+        return RET_OSSL_ERR;
+    }
+    if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+        return RET_OSSL_ERR;
+    }
+    keypoint->octet = OPENSSL_memdup(p->data, p->data_size);
+    if (!keypoint->octet) {
+        return RET_OSSL_ERR;
+    }
+    keypoint->len = p->data_size;
+
+    return RET_OSSL_OK;
+}
+#endif /* defined(NID_SLH_DSA_SHA2_128s) */
+
+int p11prov_slhdsa_pubkey_to_x509(X509_PUBKEY *pubkey, P11PROV_OBJ *key)
+{
+    int ret = RET_OSSL_ERR;
+#ifdef NID_SLH_DSA_SHA2_128s
+    struct slhdsa_key_point keypoint = { 0 };
+    int nid = NID_undef;
+
+    switch (p11prov_obj_get_key_param_set(key)) {
+    case CKP_SLH_DSA_SHA2_128S:
+        nid = NID_SLH_DSA_SHA2_128s;
+        break;
+    case CKP_SLH_DSA_SHA2_128F:
+        nid = NID_SLH_DSA_SHA2_128f;
+        break;
+    case CKP_SLH_DSA_SHA2_192S:
+        nid = NID_SLH_DSA_SHA2_192s;
+        break;
+    case CKP_SLH_DSA_SHA2_192F:
+        nid = NID_SLH_DSA_SHA2_192f;
+        break;
+    case CKP_SLH_DSA_SHA2_256S:
+        nid = NID_SLH_DSA_SHA2_256s;
+        break;
+    case CKP_SLH_DSA_SHA2_256F:
+        nid = NID_SLH_DSA_SHA2_256f;
+        break;
+    case CKP_SLH_DSA_SHAKE_128S:
+        nid = NID_SLH_DSA_SHAKE_128s;
+        break;
+    case CKP_SLH_DSA_SHAKE_128F:
+        nid = NID_SLH_DSA_SHAKE_128f;
+        break;
+    case CKP_SLH_DSA_SHAKE_192S:
+        nid = NID_SLH_DSA_SHAKE_192s;
+        break;
+    case CKP_SLH_DSA_SHAKE_192F:
+        nid = NID_SLH_DSA_SHAKE_192f;
+        break;
+    case CKP_SLH_DSA_SHAKE_256S:
+        nid = NID_SLH_DSA_SHAKE_256s;
+        break;
+    case CKP_SLH_DSA_SHAKE_256F:
+        nid = NID_SLH_DSA_SHAKE_256f;
+        break;
+    default:
+        goto done;
+    }
+
+    ret = p11prov_obj_export_public_key(key, p11prov_slhdsa_set_keypoint_data,
+                                        &keypoint);
+    if (ret != RET_OSSL_OK) {
+        goto done;
+    }
+
+    ret = X509_PUBKEY_set0_param(pubkey, OBJ_nid2obj(nid), V_ASN1_UNDEF, NULL,
+                                 keypoint.octet, keypoint.len);
+
+done:
+    if (ret != RET_OSSL_OK) {
+        OPENSSL_clear_free(keypoint.octet, keypoint.len);
+    }
+#endif
+
+    return ret;
+}
+
+/* SubjectPublicKeyInfo DER Encode */
+DISPATCH_ENCODER_FN(slhdsa, spki, der, does_selection);
+
+static int p11prov_slhdsa_encoder_spki_der_does_selection(void *inctx,
+                                                          int selection)
+{
+    if (selection & OSSL_KEYMGMT_SELECT_PUBLIC_KEY) {
+        return RET_OSSL_OK;
+    }
+    return RET_OSSL_ERR;
+}
+
+const OSSL_DISPATCH p11prov_slhdsa_encoder_spki_der_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_ENCODER_ELEM(DOES_SELECTION, slhdsa, spki, der, does_selection),
+    DISPATCH_ENCODER_ELEM(ENCODE, common, spki, der, encode),
+    { 0, NULL },
+};
+
+static int p11prov_slhdsa_encoder_priv_key_info_pem_encode(
+    void *inctx, OSSL_CORE_BIO *cbio, const void *inkey,
+    const OSSL_PARAM key_abstract[], int selection,
+    OSSL_PASSPHRASE_CALLBACK *cb, void *cbarg)
+{
+    return p11prov_encoder_private_key_write_pem(
+        CKK_SLH_DSA, inctx, cbio, inkey, key_abstract, selection, cb, cbarg);
+}
+
+const OSSL_DISPATCH p11prov_slhdsa_encoder_priv_key_info_pem_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_ENCODER_ELEM(DOES_SELECTION, common, priv_key_info, pem,
+                          does_selection),
+    DISPATCH_ENCODER_ELEM(ENCODE, slhdsa, priv_key_info, pem, encode),
+    { 0, NULL },
+};
+
+const OSSL_DISPATCH p11prov_slhdsa_encoder_text_functions[] = {
+    DISPATCH_BASE_ENCODER_ELEM(NEWCTX, newctx),
+    DISPATCH_BASE_ENCODER_ELEM(FREECTX, freectx),
+    DISPATCH_TEXT_ENCODER_ELEM(ENCODE, common, encode_text),
+    { 0, NULL },
+};
+
 /* ML-KEM */
 
 struct mlkem_key_point {
@@ -1502,3 +1708,415 @@ const OSSL_DISPATCH p11prov_mlkem_encoder_text_functions[] = {
     DISPATCH_TEXT_ENCODER_ELEM(ENCODE, common, encode_text),
     { 0, NULL },
 };
+
+#define OUTTEXT "output=text"
+#define OUTDER "output=der"
+#define OUTPEM "output=pem"
+#define STRPKCS1 "structure=pkcs1"
+#define STRSPKI "structure=SubjectPublicKeyInfo"
+#define STRPRIV "structure=PrivateKeyInfo"
+
+#define TEXT_PROP P11PROV_DEFAULT_PROPERTIES "," OUTTEXT
+#define DER_PKCS1_PROP P11PROV_DEFAULT_PROPERTIES "," OUTDER "," STRPKCS1
+#define PEM_PKCS1_PROP P11PROV_DEFAULT_PROPERTIES "," OUTPEM "," STRPKCS1
+#define DER_SPKI_PROP P11PROV_DEFAULT_PROPERTIES "," OUTDER "," STRSPKI
+#define PEM_SPKI_PROP P11PROV_DEFAULT_PROPERTIES "," OUTPEM "," STRSPKI
+#define PEM_PRIVK_PROP P11PROV_DEFAULT_PROPERTIES "," OUTPEM "," STRPRIV
+
+#define TEXT_FIPS P11PROV_FIPS_PROPERTIES "," OUTTEXT
+#define DER_PKCS1_FIPS P11PROV_FIPS_PROPERTIES "," OUTDER "," STRPKCS1
+#define PEM_PKCS1_FIPS P11PROV_FIPS_PROPERTIES "," OUTPEM "," STRPKCS1
+#define DER_SPKI_FIPS P11PROV_FIPS_PROPERTIES "," OUTDER "," STRSPKI
+#define PEM_SPKI_FIPS P11PROV_FIPS_PROPERTIES "," OUTPEM "," STRSPKI
+#define PEM_PRIVK_FIPS P11PROV_FIPS_PROPERTIES "," OUTPEM "," STRPRIV
+
+enum p11prov_encoder_algorithms {
+    P11PROV_ENCODER_RSA_TEXT,
+    P11PROV_ENCODER_RSA_DER_PKCS1,
+    P11PROV_ENCODER_RSA_PEM_PKCS1,
+    P11PROV_ENCODER_RSA_DER_SPKI,
+    P11PROV_ENCODER_RSA_PEM_SPKI,
+    P11PROV_ENCODER_RSA_PEM_PRIVK,
+
+    P11PROV_ENCODER_RSAPSS_TEXT,
+    P11PROV_ENCODER_RSAPSS_DER_PKCS1,
+    P11PROV_ENCODER_RSAPSS_PEM_PKCS1,
+    P11PROV_ENCODER_RSAPSS_DER_SPKI,
+    P11PROV_ENCODER_RSAPSS_PEM_SPKI,
+    P11PROV_ENCODER_RSAPSS_PEM_PRIVK,
+
+    P11PROV_ENCODER_EC_TEXT,
+    P11PROV_ENCODER_EC_DER_PKCS1,
+    P11PROV_ENCODER_EC_PEM_PKCS1,
+    P11PROV_ENCODER_EC_DER_SPKI,
+    P11PROV_ENCODER_EC_PEM_PRIVK,
+
+    P11PROV_ENCODER_ED25519_TEXT,
+    P11PROV_ENCODER_ED25519_PEM_PRIVK,
+
+    P11PROV_ENCODER_ED448_TEXT,
+    P11PROV_ENCODER_ED448_PEM_PRIVK,
+
+    P11PROV_ENCODER_X25519_TEXT,
+    P11PROV_ENCODER_X25519_PEM_PRIVK,
+
+    P11PROV_ENCODER_X448_TEXT,
+    P11PROV_ENCODER_X448_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_DSA_44_TEXT,
+    P11PROV_ENCODER_ML_DSA_44_DER_SPKI,
+    P11PROV_ENCODER_ML_DSA_44_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_DSA_65_TEXT,
+    P11PROV_ENCODER_ML_DSA_65_DER_SPKI,
+    P11PROV_ENCODER_ML_DSA_65_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_DSA_87_TEXT,
+    P11PROV_ENCODER_ML_DSA_87_DER_SPKI,
+    P11PROV_ENCODER_ML_DSA_87_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_KEM_512_TEXT,
+    P11PROV_ENCODER_ML_KEM_512_DER_SPKI,
+    P11PROV_ENCODER_ML_KEM_512_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_KEM_768_TEXT,
+    P11PROV_ENCODER_ML_KEM_768_DER_SPKI,
+    P11PROV_ENCODER_ML_KEM_768_PEM_PRIVK,
+
+    P11PROV_ENCODER_ML_KEM_1024_TEXT,
+    P11PROV_ENCODER_ML_KEM_1024_DER_SPKI,
+    P11PROV_ENCODER_ML_KEM_1024_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_128S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_128S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_128S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_128F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_128F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_128F_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_192S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_192S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_192S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_192F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_192F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_192F_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_256S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_256S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_256S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHA2_256F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHA2_256F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHA2_256F_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_128F_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_192F_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256S_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256S_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256S_PEM_PRIVK,
+
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256F_TEXT,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256F_DER_SPKI,
+    P11PROV_ENCODER_SLH_DSA_SHAKE_256F_PEM_PRIVK,
+
+    P11PROV_ENCODER_NUM_ALGS
+};
+
+struct encoder_algorithms {
+    OSSL_ALGORITHM a;
+    const char *fipsprop;
+    bool is_privk;
+};
+
+#define TEXT_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            TEXT_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = TEXT_FIPS, \
+        .is_privk = false, \
+    }
+#define DER_PKCS1_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            DER_PKCS1_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = DER_PKCS1_FIPS, \
+        .is_privk = false, \
+    }
+#define PEM_PKCS1_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            PEM_PKCS1_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = PEM_PKCS1_FIPS, \
+        .is_privk = false, \
+    }
+#define DER_SPKI_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            DER_SPKI_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = DER_SPKI_FIPS, \
+        .is_privk = false, \
+    }
+#define PEM_SPKI_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            PEM_SPKI_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = PEM_SPKI_FIPS, \
+        .is_privk = false, \
+    }
+#define PEM_PRIVK_ALGORITHM(name, func) \
+    { .a = \
+        { \
+            P11PROV_NAMES_##name, \
+            PEM_PRIVK_PROP, \
+            func, \
+            P11PROV_DESCS_##name, \
+        }, \
+        .fipsprop = PEM_PRIVK_FIPS, \
+        .is_privk = true, \
+    }
+
+const struct encoder_algorithms encoder_algorithms[P11PROV_ENCODER_NUM_ALGS] = {
+    [P11PROV_ENCODER_RSA_TEXT] =
+        TEXT_ALGORITHM(RSA, p11prov_rsa_encoder_text_functions),
+    [P11PROV_ENCODER_RSA_DER_PKCS1] =
+        DER_PKCS1_ALGORITHM(RSA, p11prov_rsa_encoder_pkcs1_der_functions),
+    [P11PROV_ENCODER_RSA_PEM_PKCS1] =
+        PEM_PKCS1_ALGORITHM(RSA, p11prov_rsa_encoder_pkcs1_pem_functions),
+    [P11PROV_ENCODER_RSA_DER_SPKI] =
+        DER_SPKI_ALGORITHM(RSA, p11prov_rsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_RSA_PEM_SPKI] =
+        PEM_SPKI_ALGORITHM(RSA, p11prov_rsa_encoder_spki_pem_functions),
+    [P11PROV_ENCODER_RSA_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        RSA, p11prov_rsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_RSAPSS_TEXT] =
+        TEXT_ALGORITHM(RSAPSS, p11prov_rsa_encoder_text_functions),
+    [P11PROV_ENCODER_RSAPSS_DER_PKCS1] =
+        DER_PKCS1_ALGORITHM(RSAPSS, p11prov_rsa_encoder_pkcs1_der_functions),
+    [P11PROV_ENCODER_RSAPSS_PEM_PKCS1] =
+        PEM_PKCS1_ALGORITHM(RSAPSS, p11prov_rsa_encoder_pkcs1_pem_functions),
+    [P11PROV_ENCODER_RSAPSS_DER_SPKI] =
+        DER_SPKI_ALGORITHM(RSAPSS, p11prov_rsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_RSAPSS_PEM_SPKI] =
+        PEM_SPKI_ALGORITHM(RSAPSS, p11prov_rsa_encoder_spki_pem_functions),
+    [P11PROV_ENCODER_RSAPSS_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        RSAPSS, p11prov_rsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_EC_TEXT] =
+        TEXT_ALGORITHM(EC, p11prov_ec_encoder_text_functions),
+    [P11PROV_ENCODER_EC_DER_PKCS1] =
+        DER_PKCS1_ALGORITHM(EC, p11prov_ec_encoder_pkcs1_der_functions),
+    [P11PROV_ENCODER_EC_PEM_PKCS1] =
+        PEM_PKCS1_ALGORITHM(EC, p11prov_ec_encoder_pkcs1_pem_functions),
+    [P11PROV_ENCODER_EC_DER_SPKI] =
+        DER_SPKI_ALGORITHM(EC, p11prov_ec_encoder_spki_der_functions),
+    [P11PROV_ENCODER_EC_PEM_PRIVK] =
+        PEM_PRIVK_ALGORITHM(EC, p11prov_ec_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ED25519_TEXT] =
+        TEXT_ALGORITHM(ED25519, p11prov_ec_edwards_encoder_text_functions),
+    [P11PROV_ENCODER_ED25519_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        ED25519, p11prov_ec_edwards_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ED448_TEXT] =
+        TEXT_ALGORITHM(ED448, p11prov_ec_edwards_encoder_text_functions),
+    [P11PROV_ENCODER_ED448_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        ED448, p11prov_ec_edwards_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_X25519_TEXT] =
+        TEXT_ALGORITHM(X25519, p11prov_ec_montgomery_encoder_text_functions),
+    [P11PROV_ENCODER_X25519_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        X25519, p11prov_ec_montgomery_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_X448_TEXT] =
+        TEXT_ALGORITHM(X448, p11prov_ec_montgomery_encoder_text_functions),
+    [P11PROV_ENCODER_X448_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        X448, p11prov_ec_montgomery_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_DSA_44_TEXT] =
+        TEXT_ALGORITHM(MLDSA_44, p11prov_mldsa_encoder_text_functions),
+    [P11PROV_ENCODER_ML_DSA_44_DER_SPKI] =
+        DER_SPKI_ALGORITHM(MLDSA_44, p11prov_mldsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_DSA_44_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        MLDSA_44, p11prov_mldsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_DSA_65_TEXT] =
+        TEXT_ALGORITHM(MLDSA_65, p11prov_mldsa_encoder_text_functions),
+    [P11PROV_ENCODER_ML_DSA_65_DER_SPKI] =
+        DER_SPKI_ALGORITHM(MLDSA_65, p11prov_mldsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_DSA_65_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        MLDSA_65, p11prov_mldsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_DSA_87_TEXT] =
+        TEXT_ALGORITHM(MLDSA_87, p11prov_mldsa_encoder_text_functions),
+    [P11PROV_ENCODER_ML_DSA_87_DER_SPKI] =
+        DER_SPKI_ALGORITHM(MLDSA_87, p11prov_mldsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_DSA_87_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        MLDSA_87, p11prov_mldsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_KEM_512_TEXT] =
+        TEXT_ALGORITHM(ML_KEM_512, p11prov_mlkem_encoder_text_functions),
+    [P11PROV_ENCODER_ML_KEM_512_DER_SPKI] = DER_SPKI_ALGORITHM(
+        ML_KEM_512, p11prov_mlkem_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_KEM_512_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        ML_KEM_512, p11prov_mlkem_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_KEM_768_TEXT] =
+        TEXT_ALGORITHM(ML_KEM_768, p11prov_mlkem_encoder_text_functions),
+    [P11PROV_ENCODER_ML_KEM_768_DER_SPKI] = DER_SPKI_ALGORITHM(
+        ML_KEM_768, p11prov_mlkem_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_KEM_768_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        ML_KEM_768, p11prov_mlkem_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_ML_KEM_1024_TEXT] =
+        TEXT_ALGORITHM(ML_KEM_1024, p11prov_mlkem_encoder_text_functions),
+    [P11PROV_ENCODER_ML_KEM_1024_DER_SPKI] = DER_SPKI_ALGORITHM(
+        ML_KEM_1024, p11prov_mlkem_encoder_spki_der_functions),
+    [P11PROV_ENCODER_ML_KEM_1024_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        ML_KEM_1024, p11prov_mlkem_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128S_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_128S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_128S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_128S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128F_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_128F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_128F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_128F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_128F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192S_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_192S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_192S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_192S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192F_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_192F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_192F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_192F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_192F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256S_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_256S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_256S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_256S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256F_TEXT] =
+        TEXT_ALGORITHM(SLHDSA_SHA2_256F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHA2_256F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHA2_256F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHA2_256F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128S_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_128S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_128S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_128S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128F_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_128F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_128F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_128F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_128F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192S_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_192S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_192S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_192S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192F_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_192F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_192F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_192F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_192F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256S_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_256S, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256S_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_256S, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256S_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_256S, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256F_TEXT] = TEXT_ALGORITHM(
+        SLHDSA_SHAKE_256F, p11prov_slhdsa_encoder_text_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256F_DER_SPKI] = DER_SPKI_ALGORITHM(
+        SLHDSA_SHAKE_256F, p11prov_slhdsa_encoder_spki_der_functions),
+    [P11PROV_ENCODER_SLH_DSA_SHAKE_256F_PEM_PRIVK] = PEM_PRIVK_ALGORITHM(
+        SLHDSA_SHAKE_256F, p11prov_slhdsa_encoder_priv_key_info_pem_functions),
+};
+
+CK_RV p11prov_register_encoders(P11PROV_CTX *ctx, bool fips_property,
+                                bool encode_pkey_as_pk11_uri)
+{
+    OSSL_ALGORITHM *algs =
+        OPENSSL_zalloc(sizeof(OSSL_ALGORITHM) * (P11PROV_ENCODER_NUM_ALGS + 1));
+    int i = 0;
+
+    if (algs == NULL) {
+        return CKR_HOST_MEMORY;
+    }
+
+    for (int e = 0; e < P11PROV_ENCODER_NUM_ALGS; e++) {
+        if (!encode_pkey_as_pk11_uri && encoder_algorithms[e].is_privk) {
+            continue;
+        }
+        algs[i] = encoder_algorithms[e].a;
+        if (fips_property) {
+            algs[i].property_definition = encoder_algorithms[e].fipsprop;
+        }
+        i++;
+    }
+
+    return p11prov_ctx_add_algs(ctx, OSSL_OP_ENCODER, algs);
+}

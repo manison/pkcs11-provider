@@ -182,6 +182,10 @@ Example:
 Workarounds that may be needed to deal with some tokens and cannot be
 autodetcted yet are not appropriate defaults.
 
+### luna-non-standard-cku-user
+Use the non-standard Crypto User (user type 0x80000001) available in
+Thales Luna HSMs instead of the normal Crypto Officer (CKU_USER).
+
 ### no-deinit
 It prevents de-initing when OpenSSL winds down the provider.
 NOTE this option may leak memory and may cause some modules to
@@ -241,6 +245,23 @@ Default: False
 Example:
 
 ```pkcs11-module-assume-fips = true```
+
+## pkcs11-module-default-slot-id
+
+The default slot ID for new objects.
+
+The default slot is used for any objects that do not have an explicitly
+selected slot. Such objects include, for example, public keys.
+
+This option is useful when multiple slots with different PINs are used. In such
+cases, it allows you to ensure that pkcs11-module-token-pin points to the
+expected slot.
+
+If no value is specified, the first listed slot is used.
+
+Default: none
+
+```pkcs11-module-default-slot-id = 12345```
 
 
 ENVIRONMENT VARIABLES
@@ -328,7 +349,7 @@ openssl.cnf:
     [pkcs11_sect]
     module = /usr/lib64/ossl-modules/pkcs11.so
     pkcs11-module-path = /usr/lib64/pkcs11/vendor_pkcs11.so
-    pkcs11-module-token-pin = /etc/ssl/pinfile.txt
+    pkcs11-module-token-pin = file:/etc/ssl/pinfile.txt
     activate = 1
 
 

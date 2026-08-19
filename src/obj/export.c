@@ -33,9 +33,15 @@ CK_RV get_attrs_from_cert(P11PROV_OBJ *crt, CK_ATTRIBUTE *attrs, int num)
         return CKR_GENERAL_ERROR;
     }
 
+    x509 = X509_new_ex(p11prov_ctx_get_libctx(crt->ctx),
+                       "?" P11PROV_DEFAULT_PROVIDER);
+    if (x509 == NULL) {
+        return CKR_GENERAL_ERROR;
+    }
+
     val = value->pValue;
-    x509 = d2i_X509(NULL, &val, value->ulValueLen);
-    if (!x509) {
+    if (d2i_X509(&x509, &val, value->ulValueLen) == NULL) {
+        /* x509 is freed by d2i_X509 on error */
         return CKR_GENERAL_ERROR;
     }
 
@@ -45,24 +51,9 @@ CK_RV get_attrs_from_cert(P11PROV_OBJ *crt, CK_ATTRIBUTE *attrs, int num)
         goto done;
     }
 
-    if (EVP_PKEY_is_a(pkey, "RSA")) {
-        for (int i = 0; i < num; i++) {
-            switch (attrs[i].type) {
-            case CKA_MODULUS:
-                types[attrnum] = CKA_MODULUS;
-                params[attrnum] =
-                    OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_N, NULL, 0);
-                attrnum++;
-                break;
-            case CKA_PUBLIC_EXPONENT:
-                types[attrnum] = CKA_PUBLIC_EXPONENT;
-                params[attrnum] =
-                    OSSL_PARAM_construct_BN(OSSL_PKEY_PARAM_RSA_E, NULL, 0);
-                attrnum++;
-                break;
-            }
-        }
-    } else if (EVP_PKEY_is_a(pkey, "EC")) {
+    /* All the other key types have public key material available on private key
+     * object and they could not reach here */
+    if (EVP_PKEY_is_a(pkey, "EC")) {
         for (int i = 0; i < num; i++) {
             switch (attrs[i].type) {
             case CKA_P11PROV_CURVE_NAME:
@@ -73,29 +64,6 @@ CK_RV get_attrs_from_cert(P11PROV_OBJ *crt, CK_ATTRIBUTE *attrs, int num)
                 break;
             case CKA_P11PROV_PUB_KEY:
                 types[attrnum] = CKA_P11PROV_PUB_KEY;
-                params[attrnum] = OSSL_PARAM_construct_octet_string(
-                    OSSL_PKEY_PARAM_PUB_KEY, NULL, 0);
-                attrnum++;
-                break;
-            }
-        }
-    } else if (EVP_PKEY_is_a(pkey, ED25519) || EVP_PKEY_is_a(pkey, ED448)) {
-        for (int i = 0; i < num; i++) {
-            switch (attrs[i].type) {
-            case CKA_P11PROV_PUB_KEY:
-                types[attrnum] = CKA_P11PROV_PUB_KEY;
-                params[attrnum] = OSSL_PARAM_construct_octet_string(
-                    OSSL_PKEY_PARAM_PUB_KEY, NULL, 0);
-                attrnum++;
-                break;
-            }
-        }
-    } else if (EVP_PKEY_is_a(pkey, MLDSA_44) || EVP_PKEY_is_a(pkey, MLDSA_65)
-               || EVP_PKEY_is_a(pkey, MLDSA_87)) {
-        for (int i = 0; i < num; i++) {
-            switch (attrs[i].type) {
-            case CKA_VALUE:
-                types[attrnum] = CKA_VALUE;
                 params[attrnum] = OSSL_PARAM_construct_octet_string(
                     OSSL_PKEY_PARAM_PUB_KEY, NULL, 0);
                 attrnum++;
@@ -602,9 +570,22 @@ static int ec_export_params(P11PROV_OBJ *obj, OSSL_PARAM *params, int *nparams)
     CK_RV rv;
     int ret;
 
-    attr.type = CKA_EC_PARAMS;
+    /* Prefer the Curve Name (OID) to exporting explicit params */
+    attr.type = CKA_P11PROV_CURVE_NAME;
     rv = get_public_attrs(obj, &attr, 1);
     if (rv == CKR_OK) {
+        params[*nparams] = OSSL_PARAM_construct_utf8_string(
+            OSSL_PKEY_PARAM_GROUP_NAME, attr.pValue, attr.ulValueLen);
+        attr.pValue = NULL; /* steal it, will be freed by caller */
+        *nparams += 1;
+    } else {
+        attr.type = CKA_EC_PARAMS;
+        rv = get_public_attrs(obj, &attr, 1);
+        if (rv != CKR_OK) {
+            P11PROV_raise(obj->ctx, rv, "Failed to get EC parameters");
+            ret = RET_OSSL_ERR;
+            goto done;
+        }
         /* in d2i functions 'in' is overwritten to return the remainder of
          * the buffer after parsing, so we always need to avoid passing in
          * our pointer holders, to avoid having them clobbered */
@@ -618,18 +599,6 @@ static int ec_export_params(P11PROV_OBJ *obj, OSSL_PARAM *params, int *nparams)
         if (ret != RET_OSSL_OK) {
             goto done;
         }
-    } else {
-        attr.type = CKA_P11PROV_CURVE_NAME;
-        rv = get_public_attrs(obj, &attr, 1);
-        if (rv != CKR_OK) {
-            P11PROV_raise(obj->ctx, rv, "Failed to get EC parameters");
-            ret = RET_OSSL_ERR;
-            goto done;
-        }
-        params[*nparams] = OSSL_PARAM_construct_utf8_string(
-            OSSL_PKEY_PARAM_GROUP_NAME, attr.pValue, attr.ulValueLen);
-        attr.pValue = NULL; /* steal it, will be freed by caller */
-        *nparams += 1;
     }
     ret = RET_OSSL_OK;
 
@@ -711,7 +680,7 @@ done:
     return ret;
 }
 
-static int p11prov_obj_export_public_ml_key(P11PROV_OBJ *obj,
+static int p11prov_obj_export_public_pq_key(P11PROV_OBJ *obj,
                                             OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     CK_ATTRIBUTE attrs[1] = { { 0 } };
@@ -749,7 +718,8 @@ int p11prov_obj_export_public_key(P11PROV_OBJ *obj, OSSL_CALLBACK *cb_fn,
         return p11prov_obj_export_public_ec_key(obj, cb_fn, cb_arg);
     case CKK_ML_DSA:
     case CKK_ML_KEM:
-        return p11prov_obj_export_public_ml_key(obj, cb_fn, cb_arg);
+    case CKK_SLH_DSA:
+        return p11prov_obj_export_public_pq_key(obj, cb_fn, cb_arg);
     default:
         P11PROV_raise(obj->ctx, CKR_GENERAL_ERROR,
                       "Unsupported object or key type");

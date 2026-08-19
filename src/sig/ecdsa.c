@@ -8,6 +8,9 @@
 #include "openssl/ec.h"
 #include "openssl/err.h"
 
+#define DISPATCH_ECDSA_FN(name) \
+    DECL_DISPATCH_FUNC(signature, p11prov_ecdsa, name)
+
 DISPATCH_ECDSA_FN(newctx);
 DISPATCH_ECDSA_FN(sign_init);
 DISPATCH_ECDSA_FN(sign);
@@ -82,7 +85,7 @@ struct ecdsa_data {
     { CK_UNAVAILABLE_INFORMATION, 0, NULL, 0 },
 };
 
-static struct ecdsa_data *ecdsa_digest_map(CK_MECHANISM_TYPE digest)
+static const struct ecdsa_data *ecdsa_digest_map(CK_MECHANISM_TYPE digest)
 {
     for (int i = 0; ecdsa_mech_map[i].digest != CK_UNAVAILABLE_INFORMATION;
          i++) {
@@ -102,7 +105,7 @@ static CK_RV p11prov_ecdsa_set_mechanism(P11PROV_SIG_CTX *sigctx)
     switch (sigctx->mechtype) {
     case CKM_ECDSA:
         if (sigctx->digest_op) {
-            struct ecdsa_data *data;
+            const struct ecdsa_data *data;
             data = ecdsa_digest_map(sigctx->digest);
             if (!data) {
                 return CKR_MECHANISM_INVALID;
@@ -545,7 +548,7 @@ static int p11prov_ecdsa_get_ctx_params(void *ctx, OSSL_PARAM *params)
 
     p = OSSL_PARAM_locate(params, OSSL_SIGNATURE_PARAM_ALGORITHM_ID);
     if (p) {
-        struct ecdsa_data *data;
+        const struct ecdsa_data *data;
         data = ecdsa_digest_map(sigctx->digest);
         if (!data) {
             return RET_OSSL_ERR;
@@ -662,7 +665,7 @@ static const OSSL_PARAM *p11prov_ecdsa_settable_ctx_params(void *ctx,
     return params;
 }
 
-const OSSL_DISPATCH p11prov_ecdsa_signature_functions[] = {
+const OSSL_DISPATCH p11prov_ecdsa_functions[] = {
     DISPATCH_SIG_ELEM(ecdsa, NEWCTX, newctx),
     DISPATCH_SIG_ELEM(sig, FREECTX, freectx),
     DISPATCH_SIG_ELEM(sig, DUPCTX, dupctx),
@@ -695,7 +698,7 @@ const OSSL_DISPATCH p11prov_ecdsa_signature_functions[] = {
     { \
         return p11prov_ecdsa_digest_verify_init(ctx, digest, provkey, params); \
     } \
-    const OSSL_DISPATCH p11prov_ecdsa_##alg##_signature_functions[] = { \
+    const OSSL_DISPATCH p11prov_ecdsa_##alg##_functions[] = { \
         DISPATCH_SIG_ELEM(ecdsa, NEWCTX, newctx), \
         DISPATCH_SIG_ELEM(sig, FREECTX, freectx), \
         DISPATCH_SIG_ELEM(sig, DUPCTX, dupctx), \

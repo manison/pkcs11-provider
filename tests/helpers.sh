@@ -110,10 +110,25 @@ fi
 ptool() {
     # NSS uses the second slot for certificates, so we need to provide the token
     # label in the args to allow pkcs11-tool to find the right slot
-    CMDOPTS=(--module="${P11LIB}" --token-label="${TOKENLABEL}")
+    CMDOPTS=(--module="${P11LIB}")
+    if [[ ! " $* " == *" --init-token "* ]]; then
+        CMDOPTS+=(--token-label="${TOKENLABEL}")
+    fi
     if [ -n "$P11DEFLOGIN" ]; then
         CMDOPTS+=("${P11DEFLOGIN[@]}")
     fi
+    if [ -n "$SLOTID" ]; then
+        CMDOPTS+=("--slot=${SLOTID}")
+    fi
     CMDOPTS+=("$@")
-    $CHECKER pkcs11-tool "${CMDOPTS[@]}"
+    # when running sanitizer tests libasan is linked via pkcs11-provider into
+    # openssl and pkcs11-tool is linked to libcrypto, so we need to break the
+    # link
+    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
+    unset OPENSSL_CONF
+    ORIG_LD_PRELOAD=${LD_PRELOAD}
+    unset LD_PRELOAD
+    pkcs11-tool "${CMDOPTS[@]}"
+    export OPENSSL_CONF=${ORIG_OPENSSL_CONF}
+    export LD_PRELOAD=${ORIG_LD_PRELOAD}
 }

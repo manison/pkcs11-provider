@@ -59,7 +59,18 @@ static void cache_key(P11PROV_OBJ *obj)
 {
     P11PROV_SESSION *session = NULL;
     CK_BBOOL val_false = CK_FALSE;
-    CK_ATTRIBUTE template[] = { { CKA_TOKEN, &val_false, sizeof(val_false) } };
+    /* Cache as a session object.  Clear CKA_ID and give the copy a fixed
+     * CKA_LABEL; otherwise it inherits the original id/label and, being a
+     * separate object, is returned alongside the real key by id/label lookups
+     * (e.g. a pkcs11: URI), breaking callers that expect a single match.  The
+     * provider only refers to the copy by handle; the label keeps it
+     * identifiable on the token. */
+    CK_ATTRIBUTE template[] = {
+        { CKA_TOKEN, &val_false, sizeof(val_false) },
+        { CKA_ID, (CK_BYTE_PTR) "", 0 },
+        { CKA_LABEL, (CK_BYTE_PTR) "Internal Session Only Copy",
+          sizeof("Internal Session Only Copy") - 1 },
+    };
     CK_SESSION_HANDLE sess;
     CK_BBOOL can_cache = CK_TRUE;
     CK_RV ret;
@@ -98,7 +109,8 @@ static void cache_key(P11PROV_OBJ *obj)
 
     sess = p11prov_session_handle(session);
     ret = p11prov_CopyObject(obj->ctx, sess, p11prov_obj_get_handle(obj),
-                             template, 1, &obj->cached);
+                             template, sizeof(template) / sizeof(template[0]),
+                             &obj->cached);
     if (ret != CKR_OK) {
         P11PROV_raise(obj->ctx, ret, "Failed to cache key");
         if (ret == CKR_FUNCTION_NOT_SUPPORTED) {
@@ -469,6 +481,42 @@ CK_ATTRIBUTE *p11prov_obj_get_attr(P11PROV_OBJ *obj, CK_ATTRIBUTE_TYPE type)
         if (obj->attrs[i].type == type) {
             return &obj->attrs[i];
         }
+    }
+
+    return NULL;
+}
+
+CK_ATTRIBUTE *p11prov_obj_get_public_attr(P11PROV_OBJ *obj,
+                                          CK_ATTRIBUTE_TYPE type)
+{
+    if (!obj) {
+        return NULL;
+    }
+
+    for (int i = 0; i < obj->numattrs; i++) {
+        if (obj->attrs[i].type == type) {
+            return &obj->attrs[i];
+        }
+    }
+
+    /* search public key if the private key does not have it */
+    if (obj->class == CKO_PRIVATE_KEY) {
+        P11PROV_OBJ *pubobj = p11prov_obj_find_associated(obj, CKO_PUBLIC_KEY);
+        if (pubobj == NULL) {
+            return NULL;
+        }
+
+        /* p11prov_obj_find_associated, associates the object with obj,
+         * so it is ok to return a pointer into its array as the following
+         * p11prov_obj_free() will just dereference our pointer, but the
+         * object is still held alive by obj itself */
+        for (int i = 0; i < pubobj->numattrs; i++) {
+            if (pubobj->attrs[i].type == type) {
+                return &pubobj->attrs[i];
+            }
+        }
+
+        p11prov_obj_free(pubobj);
     }
 
     return NULL;

@@ -172,5 +172,6 @@ void p11prov_set_attr_bool(CK_ATTRIBUTE *tmpl, CK_ATTRIBUTE_TYPE type, bool v);
 CK_RV p11prov_usage_to_template(CK_ATTRIBUTE *tmpl, size_t *size, size_t max,
                                 CK_FLAGS usage);
 CK_KEY_TYPE p11prov_get_key_type_from_string(const char *key_type);
+const char *p11prov_ec_group_to_curve_name(EC_GROUP *group, int *nid);
 
 #endif /* _UTIL_H */

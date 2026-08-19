@@ -26,7 +26,7 @@ jobs:
         shell: bash
 
       - name: DNF cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             /var/cache/libdnf5
@@ -36,7 +36,7 @@ jobs:
         run: dnf -y install gcc git meson openssl-devel
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup, Build and Install pkcs11-provider
         run: |
@@ -60,7 +60,7 @@ jobs:
         shell: bash
 
       - name: DNF cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             /var/cache/libdnf5
@@ -73,7 +73,7 @@ jobs:
               gcc g++ sqlite-devel httpd bind9-next softhsm
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get Kryoptic
         id: kryoptic_setup
@@ -88,7 +88,7 @@ jobs:
           cargo generate-lockfile
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/

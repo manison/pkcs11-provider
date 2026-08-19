@@ -20,7 +20,7 @@ jobs:
         shell: bash
 
       - name: DNF cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             /var/cache/libdnf5
@@ -30,10 +30,10 @@ jobs:
         run: |
             dnf -y install clang git meson cargo expect pkgconf-pkg-config \
               openssl-devel openssl opensc p11-kit-devel \
-              gcc g++ sqlite-devel python3-six which
+              gcc g++ sqlite-devel python3-six which xxd
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get Kryoptic
         id: kryoptic_setup
@@ -48,7 +48,7 @@ jobs:
           cargo generate-lockfile
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -82,7 +82,7 @@ jobs:
         run:
           meson test --num-processes 1 -C builddir
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: Test logs kryoptic

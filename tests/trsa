@@ -52,7 +52,6 @@ pkeyutl -verify -inkey "${PUBURI}"
                 -sigfile ${TMPPDIR}/sha256-sig.bin'
 
 title PARA "Sign and Verify with provided Hash and RSA with DigestInfo struct"
-ossl 'dgst -sha256 -binary -out ${TMPPDIR}/sha256.bin ${SEEDFILE}'
 ossl '
 pkeyutl -sign -inkey "${PRIURI}" -pkeyopt digest:sha256
               -in ${TMPPDIR}/sha256.bin
@@ -99,14 +98,29 @@ if [[ "$SUPPORT_RSA_PKCS1_ENCRYPTION" = "1" ]]; then
                      -in ${SECRETFILE}.enc
                      -out ${SECRETFILE}.dec'
     diff "${SECRETFILE}" "${SECRETFILE}.dec"
+
+    # Do the same while forcing the encryption to be done on the token
+    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
+    OPENSSL_CONF=${OPENSSL_CONF}.forcetoken
+
+    title LINE "RSA basic encrypt and decrypt, forcing encryption on token"
+    ossl '
+    pkeyutl -encrypt -inkey "${PUBURI}" -pubin
+                     -in ${SECRETFILE}
+                     -out ${SECRETFILE}.enc'
+    ossl '
+    pkeyutl -decrypt -inkey "${PRIURI}"
+                     -in ${SECRETFILE}.enc
+                     -out ${SECRETFILE}.dec'
+    diff "${SECRETFILE}" "${SECRETFILE}.dec"
+
+    OPENSSL_CONF=${ORIG_OPENSSL_CONF}
 fi
 
 # Test RSA fallback code to emulate digest-sign via Raw RSA
 if [[  "$TOKENTYPE" = "kryoptic" ]]; then
     title PARA "Fallback DigestVerify  and DigestSign with RSA forced on token"
     ORIG_OPENSSL_CONF=${OPENSSL_CONF}
-    sed -e "s/#MORECONF/alg_section = algorithm_sec\n\n[algorithm_sec]\ndefault_properties = ?provider=pkcs11/" \
-        "${OPENSSL_CONF}" > "${OPENSSL_CONF}.forcetoken"
     OPENSSL_CONF=${OPENSSL_CONF}.forcetoken
 
     ORIG_KRYOPTIC_CONF=${KRYOPTIC_CONF}

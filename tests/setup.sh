@@ -23,6 +23,7 @@ TOKENTYPE=$1
 # defaults -- overridden below or in the per-token setup
 SUPPORT_ED25519=1
 SUPPORT_ED448=1
+SUPPORT_EDDSA_PARAMS=1
 SUPPORT_X25519=1
 SUPPORT_X448=1
 SUPPORT_RSA_PKCS1_ENCRYPTION=1
@@ -31,6 +32,7 @@ SUPPORT_TLSFUZZER=1
 SUPPORT_ALLOWED_MECHANISMS=0
 SUPPORT_SYMMETRIC=1
 SUPPORT_BLOCK_MODES="CBC OFB CFB CFB1 CFB8 CTR ECB"
+SUPPORT_OPERATION_STATE=0
 
 # Ed448 requires OpenSC 0.26.0
 OPENSC_VERSION=$(opensc-tool -i | grep OpenSC | sed -e "s/OpenSC 0\.\([0-9]*\).*/\1/")
@@ -97,6 +99,8 @@ elif [ "${TOKENTYPE}" == "kryoptic" ]; then
     source "${TESTSSRCDIR}/kryoptic-init.sh"
 elif [ "${TOKENTYPE}" == "kryoptic.nss" ]; then
     source "${TESTSSRCDIR}/kryoptic.nss-init.sh"
+elif [ "${TOKENTYPE}" == "kryoptic.multislot" ]; then
+    source "${TESTSSRCDIR}/kryoptic.multislot-init.sh"
 else
     echo "Unknown token type: $1"
     exit 1
@@ -135,6 +139,17 @@ sed -e "s|@libtoollibs@|${LIBSPATH}|g" \
     -e "s|@PINFILE@|${PINFILE}|g" \
     -e "s|##TOKENOPTIONS|${TOKENOPTIONS}|g" \
     "${TESTSSRCDIR}/openssl.cnf.in" > "${OPENSSL_CONF}"
+
+# setup configuration that forces all operations on token here
+BLOCKED_OPERATIONS="digest"
+if [[ "${SUPPORT_SYMMETRIC}" = "0" ]]; then
+    # For tokens that do not support symmetric key operations, disable these too
+    BLOCKED_OPERATIONS="${BLOCKED_OPERATIONS} cipher skeymgmt"
+fi
+sed -e "s/^#pkcs11-module-block-operations/pkcs11-module-block-operations = ${BLOCKED_OPERATIONS}/" \
+    "${OPENSSL_CONF}" > "${OPENSSL_CONF}.forcetoken"
+sed -e "s/#MORECONF/alg_section = algorithm_sec\n\n[algorithm_sec]\ndefault_properties = ?provider=pkcs11/" \
+     "${sed_inplace[@]}" "${OPENSSL_CONF}.forcetoken"
 
 # Serial = 1 is the CA
 SERIAL=0
@@ -627,6 +642,41 @@ if [ "$SUPPORT_ML_KEM" -eq 1 ]; then
     echo ""
 fi
 
+if [ "$SUPPORT_SLH_DSA" -eq 1 ]; then
+    title PARA "generate SLH-DSA Key pair"
+    get_next_keyid
+    TSTCRTN="slhDsa"
+
+    # not supported by the pkcs11-tool yet. Do it for now with OpenSSL CLI
+    # ptool --keypairgen --key-type="SLH-DSA-SHAKE-128S" --id="$KEYID" \
+    #       --label="${TSTCRTN}" 2>&1
+    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
+    # We need to configure pkcs11 to allow emitting PEM URIs so that the
+    # genpkey command does not fail on trying to emit the private key PEM file.
+    sed -e "s/#pkcs11-module-encode-provider-uri-to-pem/pkcs11-module-encode-provider-uri-to-pem = true/" \
+        "${OPENSSL_CONF}" > "${OPENSSL_CONF}.slhdsa_pem_uri"
+    OPENSSL_CONF=${OPENSSL_CONF}.slhdsa_pem_uri
+    ossl '
+    genpkey -propquery "provider=pkcs11"
+            -algorithm SLH-DSA-SHAKE-128s
+            -pkeyopt "pkcs11_uri:pkcs11:object=${TSTCRTN};id=${URIKEYID}"'
+    OPENSSL_CONF=${ORIG_OPENSSL_CONF}
+    ca_sign $TSTCRTN "My SLH-DSA Cert" "$KEYID"
+
+    SLHDSABASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
+    SLHDSABASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
+    SLHDSABASEURI="pkcs11:id=${URIKEYID}"
+    SLHDSAPUBURI="pkcs11:type=public;id=${URIKEYID}"
+    SLHDSAPRIURI="pkcs11:type=private;id=${URIKEYID}"
+    SLHDSACRTURI="pkcs11:type=cert;object=${TSTCRTN}"
+
+    title LINE "SLH-DSA PKCS11 URIS"
+    echo "${SLHDSABASEURI}"
+    echo "${SLHDSAPUBURI}"
+    echo "${SLHDSAPRIURI}"
+    echo "${SLHDSACRTURI}"
+    echo ""
+fi
 
 title PARA "Show contents of ${TOKENTYPE} token"
 echo " ----------------------------------------------------------------------------------------------------"
@@ -650,8 +700,10 @@ export SUPPORT_ED25519="${SUPPORT_ED25519}"
 export SUPPORT_ED448="${SUPPORT_ED448}"
 export SUPPORT_X25519="${SUPPORT_X25519}"
 export SUPPORT_X448="${SUPPORT_X448}"
+export SUPPORT_EDDSA_PARAMS="${SUPPORT_EDDSA_PARAMS}"
 export SUPPORT_ML_DSA="${SUPPORT_ML_DSA}"
 export SUPPORT_ML_KEM="${SUPPORT_ML_KEM}"
+export SUPPORT_SLH_DSA="${SUPPORT_SLH_DSA}"
 export SUPPORT_RSA_PKCS1_ENCRYPTION="${SUPPORT_RSA_PKCS1_ENCRYPTION}"
 export SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT="${SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT}"
 export SUPPORT_TLSFUZZER="${SUPPORT_TLSFUZZER}"
@@ -659,6 +711,7 @@ export SUPPORT_ALLOWED_MECHANISMS="${SUPPORT_ALLOWED_MECHANISMS}"
 export SUPPORT_SKEY="${SUPPORT_SKEY}"
 export SUPPORT_SYMMETRIC="${SUPPORT_SYMMETRIC}"
 export SUPPORT_BLOCK_MODES="${SUPPORT_BLOCK_MODES}"
+export SUPPORT_OPERATION_STATE="${SUPPORT_OPERATION_STATE}"
 
 export TESTPORT="${TESTPORT}"
 
@@ -799,6 +852,16 @@ export RSAPSS2CRTURI="${RSAPSS2CRTURI}"
 DBGSCRIPT
 fi
 
+if [ -n "${PRIURI2}" ]; then
+    cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
+
+export BASEURI2WITHPINVALUE="${BASEURI2WITHPINVALUE}"
+export BASEURI2="${BASEURI2}"
+export PUBURI2="${PUBURI2}"
+export PRIURI2="${PRIURI2}"
+DBGSCRIPT
+fi
+
 if [ -n "${MLDSABASEURI}" ]; then
     cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
 
@@ -819,6 +882,18 @@ export MLKEMBASEURIWITHPINSOURCE="${MLKEMBASEURIWITHPINSOURCE}"
 export MLKEMBASEURI="${MLKEMBASEURI}"
 export MLKEMPUBURI="${MLKEMPUBURI}"
 export MLKEMPRIURI="${MLKEMPRIURI}"
+DBGSCRIPT
+fi
+
+if [ -n "${SLHDSABASEURI}" ]; then
+    cat >> "${TMPPDIR}/testvars" <<DBGSCRIPT
+
+export SLHDSABASEURIWITHPINVALUE="${SLHDSABASEURIWITHPINVALUE}"
+export SLHDSABASEURIWITHPINSOURCE="${SLHDSABASEURIWITHPINSOURCE}"
+export SLHDSABASEURI="${SLHDSABASEURI}"
+export SLHDSAPUBURI="${SLHDSAPUBURI}"
+export SLHDSAPRIURI="${SLHDSAPRIURI}"
+export SLHDSACRTURI="${SLHDSACRTURI}"
 DBGSCRIPT
 fi
 
