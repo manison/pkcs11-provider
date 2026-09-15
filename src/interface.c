@@ -67,6 +67,7 @@ struct p11prov_interface {
     CK_C_DecryptFinal DecryptFinal;
     CK_C_DigestInit DigestInit;
     CK_C_DigestUpdate DigestUpdate;
+    CK_C_DigestKey DigestKey;
     CK_C_DigestFinal DigestFinal;
     CK_C_SignInit SignInit;
     CK_C_Sign Sign;
@@ -163,6 +164,7 @@ static void populate_interface(P11PROV_INTERFACE *intf, CK_INTERFACE *ck_intf)
     ASSIGN_FN(DecryptFinal);
     ASSIGN_FN(DigestInit);
     ASSIGN_FN(DigestUpdate);
+    ASSIGN_FN(DigestKey);
     ASSIGN_FN(DigestFinal);
     ASSIGN_FN(SignInit);
     ASSIGN_FN(Sign);

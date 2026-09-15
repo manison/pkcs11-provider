@@ -4,7 +4,9 @@
 #include "provider.h"
 #include "kmgmt/internal.h"
 
-DISPATCH_KEYMGMT_FN(mldsa, new);
+DISPATCH_KEYMGMT_FN(mldsa_44, new);
+DISPATCH_KEYMGMT_FN(mldsa_65, new);
+DISPATCH_KEYMGMT_FN(mldsa_87, new);
 DISPATCH_KEYMGMT_FN(mldsa_44, gen_init);
 DISPATCH_KEYMGMT_FN(mldsa_65, gen_init);
 DISPATCH_KEYMGMT_FN(mldsa_87, gen_init);
@@ -17,10 +19,244 @@ DISPATCH_KEYMGMT_FN(mldsa, export_types);
 DISPATCH_KEYMGMT_FN(mldsa, get_params);
 DISPATCH_KEYMGMT_FN(mldsa, gettable_params);
 
-static void *p11prov_mldsa_new(void *provctx)
+extern const CK_BBOOL val_true;
+extern const CK_BBOOL val_false;
+
+#define MLDSA_PUBKEY_TEMPLATE_SIZE 6
+#define MLDSA_PRIVKEY_TEMPLATE_SIZE 10
+_Static_assert(MLDSA_PUBKEY_TEMPLATE_SIZE <= P11PROV_PUBKEY_MAX_TEMPLATE_SIZE,
+               "ML-DSA public key template size exceeds maximum");
+_Static_assert(MLDSA_PRIVKEY_TEMPLATE_SIZE <= P11PROV_PRIVKEY_MAX_TEMPLATE_SIZE,
+               "ML-DSA private key template size exceeds maximum");
+
+static int p11prov_mldsa_get_template(P11PROV_OBJ *obj, CK_OBJECT_CLASS class,
+                                      const OSSL_PARAM *params,
+                                      CK_ATTRIBUTE *template)
 {
+    static const CK_OBJECT_CLASS pub_class = CKO_PUBLIC_KEY;
+    static const CK_OBJECT_CLASS priv_class = CKO_PRIVATE_KEY;
+    static const CK_KEY_TYPE mldsa_type = CKK_ML_DSA;
+    const OSSL_PARAM *p;
+    CK_ATTRIBUTE *a;
+    int cnt = 0;
+
+    if (!obj || !template || p11prov_obj_get_key_type(obj) != CKK_ML_DSA
+        || p11prov_obj_get_class(obj) != class) {
+        return -1;
+    }
+
+    template[cnt].type = CKA_KEY_TYPE;
+    template[cnt].pValue = DISCARD_CONST(&mldsa_type);
+    template[cnt].ulValueLen = sizeof(CK_KEY_TYPE);
+    cnt++;
+
+    template[cnt].type = CKA_TOKEN;
+    template[cnt].pValue = DISCARD_CONST(&val_false);
+    template[cnt].ulValueLen = sizeof(CK_BBOOL);
+    cnt++;
+
+    a = p11prov_obj_get_attr(obj, CKA_PARAMETER_SET);
+    if (!a) {
+        return -1;
+    }
+    template[cnt] = *a;
+    cnt++;
+
+    switch (class) {
+    case CKO_PUBLIC_KEY:
+        template[cnt].type = CKA_CLASS;
+        template[cnt].pValue = DISCARD_CONST(&pub_class);
+        template[cnt].ulValueLen = sizeof(CK_OBJECT_CLASS);
+        cnt++;
+
+        template[cnt].type = CKA_VERIFY;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        a = p11prov_obj_get_attr(obj, CKA_VALUE);
+        if (!a) {
+            return -1;
+        }
+        template[cnt] = *a;
+        cnt++;
+
+        return cnt;
+
+    case CKO_PRIVATE_KEY:
+        if (!params) {
+            return -1;
+        }
+
+        template[cnt].type = CKA_CLASS;
+        template[cnt].pValue = DISCARD_CONST(&priv_class);
+        template[cnt].ulValueLen = sizeof(CK_OBJECT_CLASS);
+        cnt++;
+
+        template[cnt].type = CKA_SENSITIVE;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        template[cnt].type = CKA_EXTRACTABLE;
+        template[cnt].pValue = DISCARD_CONST(&val_false);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        template[cnt].type = CKA_SIGN;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        a = p11prov_obj_get_attr(obj, CKA_ID);
+        if (a) {
+            template[cnt] = *a;
+            cnt++;
+        }
+
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            return -1;
+        }
+        template[cnt].type = CKA_VALUE;
+        template[cnt].pValue = p->data;
+        template[cnt].ulValueLen = p->data_size;
+        cnt++;
+
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_ML_DSA_SEED);
+        if (p) {
+            template[cnt].type = CKA_SEED;
+            template[cnt].pValue = p->data;
+            template[cnt].ulValueLen = p->data_size;
+            cnt++;
+        }
+
+        return cnt;
+
+    default:
+        return -1;
+    }
+}
+
+static CK_RV p11prov_mldsa_get_find_attrs(
+    P11PROV_OBJ *obj, CK_OBJECT_CLASS class, const OSSL_PARAM *params,
+    CK_ATTRIBUTE attrs[], int *out_numattrs)
+{
+    P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(obj);
+    CK_ULONG param_set = p11prov_obj_get_key_param_set(obj);
+    const OSSL_PARAM *p;
+    int numattrs = 0;
+    CK_ULONG key_size;
+    CK_RV rv;
+
+    if (!obj || !params || !out_numattrs
+        || p11prov_obj_get_key_type(obj) != CKK_ML_DSA) {
+        return CKR_ARGUMENTS_BAD;
+    }
+
+    switch (param_set) {
+    case CKP_ML_DSA_44:
+        key_size = ML_DSA_44_PK_SIZE;
+        break;
+    case CKP_ML_DSA_65:
+        key_size = ML_DSA_65_PK_SIZE;
+        break;
+    case CKP_ML_DSA_87:
+        key_size = ML_DSA_87_PK_SIZE;
+        break;
+    default:
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    switch (class) {
+    case CKO_PUBLIC_KEY:
+        rv = p11prov_kmgmt_params_to_attr(ctx, attrs, &numattrs, params,
+                                          OSSL_PKEY_PARAM_PUB_KEY, CKA_VALUE,
+                                          false);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        if (key_size != attrs[numattrs - 1].ulValueLen) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE,
+                          "Unexpected public key size %lu (expected %lu)",
+                          attrs[numattrs - 1].ulValueLen, key_size);
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+        break;
+
+    case CKO_PRIVATE_KEY:
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                          OSSL_PKEY_PARAM_PRIV_KEY);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+
+        rv = p11prov_kmgmt_privkey_to_id(
+            ctx, attrs, &numattrs, (const uint8_t *)"ML-DSA", 6,
+            (const uint8_t *)&param_set, sizeof(param_set), p->data,
+            p->data_size);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        break;
+
+    default:
+        return CKR_GENERAL_ERROR;
+    }
+
+    /* common params */
+    rv = p11prov_kmgmt_param_data_to_attr(attrs, &numattrs, CKA_PARAMETER_SET,
+                                          (uint8_t *)&param_set,
+                                          sizeof(param_set), false);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    p11prov_obj_set_key_bits(obj, key_size * 8, key_size);
+    *out_numattrs = numattrs;
+    rv = CKR_OK;
+
+done:
+    if (rv != CKR_OK) {
+        for (int i = 0; i < numattrs; i++) {
+            OPENSSL_free(attrs[i].pValue);
+            attrs[i].pValue = NULL;
+        }
+        *out_numattrs = 0;
+    }
+    return rv;
+}
+
+static void *p11prov_mldsa_new_int(void *provctx,
+                                   CK_ML_DSA_PARAMETER_SET_TYPE param_set)
+{
+    P11PROV_OBJ *key;
+
     P11PROV_debug("mldsa new");
-    return p11prov_kmgmt_new(provctx, CKK_ML_DSA);
+    key = p11prov_kmgmt_new(provctx, CKK_ML_DSA);
+    if (key) {
+        p11prov_obj_set_key_params(key, param_set);
+        p11prov_obj_set_get_template(key, p11prov_mldsa_get_template);
+        p11prov_obj_set_get_find_attrs(key, p11prov_mldsa_get_find_attrs);
+    }
+    return key;
+}
+
+static void *p11prov_mldsa_44_new(void *provctx)
+{
+    return p11prov_mldsa_new_int(provctx, CKP_ML_DSA_44);
+}
+
+static void *p11prov_mldsa_65_new(void *provctx)
+{
+    return p11prov_mldsa_new_int(provctx, CKP_ML_DSA_65);
+}
+
+static void *p11prov_mldsa_87_new(void *provctx)
+{
+    return p11prov_mldsa_new_int(provctx, CKP_ML_DSA_87);
 }
 
 static void *p11prov_mldsa_gen_init_int(void *provctx, int selection,
@@ -134,33 +370,15 @@ static int p11prov_mldsa_match(const void *keydata1, const void *keydata2,
     return p11prov_kmgmt_match(keydata1, keydata2, CKK_ML_DSA, selection);
 }
 
-static int p11prov_mldsa_44_import(void *keydata, int selection,
-                                   const OSSL_PARAM params[])
+static int p11prov_mldsa_import(void *keydata, int selection,
+                                const OSSL_PARAM params[])
 {
-    return p11prov_kmgmt_import(CKK_ML_DSA, CKP_ML_DSA_44,
+    p11prov_obj_set_get_find_attrs((P11PROV_OBJ *)keydata,
+                                   p11prov_mldsa_get_find_attrs);
+    return p11prov_kmgmt_import(CKK_ML_DSA, CK_UNAVAILABLE_INFORMATION,
                                 OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
                                 params);
 }
-
-static int p11prov_mldsa_65_import(void *keydata, int selection,
-                                   const OSSL_PARAM params[])
-{
-    return p11prov_kmgmt_import(CKK_ML_DSA, CKP_ML_DSA_65,
-                                OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
-                                params);
-}
-
-static int p11prov_mldsa_87_import(void *keydata, int selection,
-                                   const OSSL_PARAM params[])
-{
-    return p11prov_kmgmt_import(CKK_ML_DSA, CKP_ML_DSA_87,
-                                OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
-                                params);
-}
-
-#ifndef OSSL_PKEY_PARAM_ML_DSA_SEED
-#define OSSL_PKEY_PARAM_ML_DSA_SEED "seed"
-#endif
 
 static const OSSL_PARAM *p11prov_mldsa_import_types(int selection)
 {
@@ -310,7 +528,7 @@ static const OSSL_PARAM *p11prov_mldsa_gettable_params(void *provctx)
 #define p11prov_mldsa_export p11prov_kmgmt_export
 
 const OSSL_DISPATCH p11prov_mldsa44_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mldsa, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mldsa_44, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mldsa_44, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mldsa, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -320,7 +538,7 @@ const OSSL_DISPATCH p11prov_mldsa44_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mldsa, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mldsa_44, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mldsa, EXPORT_TYPES, export_types),
@@ -330,7 +548,7 @@ const OSSL_DISPATCH p11prov_mldsa44_keymgmt_functions[] = {
 };
 
 const OSSL_DISPATCH p11prov_mldsa65_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mldsa, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mldsa_65, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mldsa_65, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mldsa, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -340,7 +558,7 @@ const OSSL_DISPATCH p11prov_mldsa65_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mldsa, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mldsa_65, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mldsa, EXPORT_TYPES, export_types),
@@ -350,7 +568,7 @@ const OSSL_DISPATCH p11prov_mldsa65_keymgmt_functions[] = {
 };
 
 const OSSL_DISPATCH p11prov_mldsa87_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mldsa, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mldsa_87, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mldsa_87, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mldsa, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -360,7 +578,7 @@ const OSSL_DISPATCH p11prov_mldsa87_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mldsa, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mldsa_87, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mldsa, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mldsa, EXPORT_TYPES, export_types),

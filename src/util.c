@@ -3,6 +3,7 @@
 
 #include "provider.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "platform/endian.h"
@@ -225,28 +226,18 @@ done:
     return ret;
 }
 
-static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
-                        void **output)
+static int get_pin_file(P11PROV_CTX *ctx, const char *filename, void **output)
 {
-    char pin[MAX_PIN_LENGTH + 1] = { 0 };
-    char *pinfile;
-    char *filename;
+    CK_ULONG max_pin_len = p11prov_ctx_max_pin_length(ctx);
+    char *pin = NULL;
     BIO *fp;
+    char extra;
     int ret;
 
-    ret = parse_attr(str, len, (uint8_t **)&pinfile, NULL);
-    if (ret != 0) {
-        return ret;
-    }
-
-    if (strncmp((const char *)pinfile, "file:", 5) == 0) {
-        filename = pinfile + 5;
-    } else if (*pinfile == '|') {
-        ret = EINVAL;
+    pin = OPENSSL_zalloc(max_pin_len + 1);
+    if (pin == NULL) {
+        ret = ENOMEM;
         goto done;
-    } else {
-        /* missing 'file:' is accepted */
-        filename = pinfile;
     }
 
     fp = BIO_new_file(filename, "r");
@@ -255,9 +246,17 @@ static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
         ret = ENOENT;
         goto done;
     }
-    ret = BIO_gets(fp, pin, sizeof(pin));
+    ret = BIO_read(fp, pin, max_pin_len + 1);
     if (ret <= 0) {
         P11PROV_debug("Failed to get pin from %s (%d)", filename, ret);
+        ret = EINVAL;
+        BIO_free(fp);
+        goto done;
+    }
+    if ((CK_ULONG)ret == max_pin_len + 1 && BIO_read(fp, &extra, 1) > 0) {
+        P11PROV_debug(
+            "Failed to get pin from %s, file is bigger than max allowed (%lu)",
+            filename, max_pin_len + 1);
         ret = EINVAL;
         BIO_free(fp);
         goto done;
@@ -273,15 +272,74 @@ static int get_pin_file(P11PROV_CTX *ctx, const char *str, size_t len,
         }
     }
 
-    *output = OPENSSL_strdup(pin);
-    if (*output == NULL) {
-        ret = ENOMEM;
+    if (pin[max_pin_len] != '\0') {
+        P11PROV_debug(
+            "Failed to get pin from %s, pin is longer than max length (%lu)",
+            filename, max_pin_len);
+        ret = EINVAL;
         goto done;
     }
 
+    *output = pin;
+    pin = NULL;
     ret = 0;
+
 done:
-    OPENSSL_free(pinfile);
+    if (pin != NULL) {
+        OPENSSL_clear_free(pin, max_pin_len + 1);
+    }
+    return ret;
+}
+
+static int get_pin_env(P11PROV_CTX *ctx, const char *envvar, void **output)
+{
+    CK_ULONG max_pin_len = p11prov_ctx_max_pin_length(ctx);
+    const char *val;
+    char *pin;
+    size_t len;
+
+    val = getenv(envvar);
+    if (val == NULL) {
+        P11PROV_debug("Failed to get pin from %s (env var not found)", envvar);
+        return ENOENT;
+    }
+
+    len = strlen(val);
+    if (len > max_pin_len) {
+        P11PROV_debug(
+            "Failed to get pin from %s, pin is longer than max length (%lu)",
+            envvar, max_pin_len);
+        return EINVAL;
+    }
+
+    pin = OPENSSL_strdup(val);
+    if (pin == NULL) {
+        return ENOMEM;
+    }
+
+    *output = pin;
+    return 0;
+}
+
+static int get_pin_source(P11PROV_CTX *ctx, const char *str, size_t len,
+                          void **output)
+{
+    char *pinsource = NULL;
+    int ret;
+
+    ret = parse_attr(str, len, (uint8_t **)&pinsource, NULL);
+    if (ret != 0) {
+        return ret;
+    }
+
+    if (strncmp((const char *)pinsource, "file:", 5) == 0) {
+        ret = get_pin_file(ctx, pinsource + 5, output);
+    } else if (strncmp((const char *)pinsource, "env:", 4) == 0) {
+        ret = get_pin_env(ctx, pinsource + 4, output);
+    } else if (*pinsource == '|') {
+        ret = EINVAL;
+    }
+    OPENSSL_free(pinsource);
     return ret;
 }
 
@@ -516,7 +574,7 @@ P11PROV_URI *p11prov_parse_uri(P11PROV_CTX *ctx, const char *uri)
         DECL_ATTR_COMP(type, parse_class),
         { "pin-value", sizeof("pin-value") - 1, parse_utf8str,
           (void **)&u.pin },
-        { "pin-source", sizeof("pin-source") - 1, get_pin_file,
+        { "pin-source", sizeof("pin-source") - 1, get_pin_source,
           (void **)&u.pin },
         { "object-type", sizeof("object-type") - 1, parse_class,
           (void **)&u.type },
@@ -902,7 +960,7 @@ CK_RV p11prov_uri_match_token(P11PROV_URI *uri, CK_SLOT_ID slot_id,
 int p11prov_get_pin(P11PROV_CTX *ctx, const char *in, char **out)
 {
     if (strncmp(in, "file:", 5) == 0) {
-        return get_pin_file(ctx, in, strlen(in), (void **)out);
+        return get_pin_file(ctx, in + 5, (void **)out);
     }
 
     *out = OPENSSL_strdup(in);
@@ -1006,6 +1064,49 @@ CK_RV p11prov_copy_attr(CK_ATTRIBUTE *dst, CK_ATTRIBUTE *src)
     dst->type = src->type;
 
     return CKR_OK;
+}
+
+CK_RV p11prov_bn_param_to_attr(const OSSL_PARAM *p, CK_ATTRIBUTE *attr)
+{
+    BIGNUM *bn = NULL;
+    int bnlen;
+    int err = 0;
+    CK_RV ret;
+
+    if (p == NULL) {
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    /* FIXME: investigate if this needs to be done in constant time
+     * See BN_FLG_CONSTTIME */
+
+    err = OSSL_PARAM_get_BN(p, &bn);
+    if (err != RET_OSSL_OK) {
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    bnlen = BN_num_bytes(bn);
+    attr->pValue = OPENSSL_malloc(bnlen);
+    if (!attr->pValue) {
+        ret = CKR_HOST_MEMORY;
+        goto done;
+    }
+    attr->ulValueLen = BN_bn2bin(bn, attr->pValue);
+    if (attr->ulValueLen == 0 || attr->ulValueLen > (CK_ULONG)bnlen) {
+        attr->ulValueLen = bnlen;
+        ret = CKR_KEY_INDIGESTIBLE;
+        goto done;
+    }
+
+    ret = CKR_OK;
+
+done:
+    if (ret != CKR_OK) {
+        OPENSSL_clear_free(attr->pValue, bnlen);
+        attr->pValue = NULL;
+    }
+    BN_free(bn);
+    return ret;
 }
 
 CK_RV p11prov_bn_to_attr(CK_ATTRIBUTE *dst, BIGNUM *bn)

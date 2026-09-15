@@ -21,11 +21,11 @@ fi
 TOKENTYPE=$1
 
 # defaults -- overridden below or in the per-token setup
-SUPPORT_ED25519=1
-SUPPORT_ED448=1
+SUPPORT_ED25519=0
+SUPPORT_ED448=0
 SUPPORT_EDDSA_PARAMS=1
-SUPPORT_X25519=1
-SUPPORT_X448=1
+SUPPORT_X25519=0
+SUPPORT_X448=0
 SUPPORT_RSA_PKCS1_ENCRYPTION=1
 SUPPORT_RSA_KEYGEN_PUBLIC_EXPONENT=1
 SUPPORT_TLSFUZZER=1
@@ -33,21 +33,40 @@ SUPPORT_ALLOWED_MECHANISMS=0
 SUPPORT_SYMMETRIC=1
 SUPPORT_BLOCK_MODES="CBC OFB CFB CFB1 CFB8 CTR ECB"
 SUPPORT_OPERATION_STATE=0
+SUPPORT_ML_DSA=0
+SUPPORT_ML_KEM=0
+SUPPORT_SLH_DSA=0
+SUPPORT_ED25519_KEY_GEN=0
+SUPPORT_ED448_KEY_GEN=0
+SUPPORT_X25519_KEY_GEN=0
+SUPPORT_X448_KEY_GEN=0
+SUPPORT_ML_DSA_KEY_GEN=0
+SUPPORT_ML_KEM_KEY_GEN=0
+SUPPORT_SLH_DSA_KEY_GEN=0
+SUPPRESS_ED25519=${SUPPRESS_ED25519:-0}
+SUPPRESS_ED448=${SUPPRESS_ED448:-0}
+SUPPRESS_X25519=${SUPPRESS_X25519:-0}
+SUPPRESS_X448=${SUPPRESS_X448:-0}
+SUPPRESS_ML_DSA=${SUPPRESS_ML_DSA:-0}
+SUPPRESS_ML_KEM=${SUPPRESS_ML_KEM:-0}
+SUPPRESS_SLH_DSA=${SUPPRESS_SLH_DSA:-0}
 
 # Ed448 requires OpenSC 0.26.0
 OPENSC_VERSION=$(opensc-tool -i | grep OpenSC | sed -e "s/OpenSC 0\.\([0-9]*\).*/\1/")
 if [[ "$OPENSC_VERSION" -le "25" ]]; then
-    SUPPORT_ED448=0
+    SUPPRESS_ED448=1
 fi
 
 # FIPS Mode
 if [[ "${PKCS11_PROVIDER_FORCE_FIPS_MODE}" = "1" || "$(cat /proc/sys/crypto/fips_enabled)" = "1" ]]; then
-    # We can not use Edwards curves in FIPS mode
-    SUPPORT_ED25519=0
-    SUPPORT_ED448=0
-    # We can not use Montgomery curves in FIPS mode
-    SUPPORT_X25519=0
-    SUPPORT_X448=0
+    # We can not use any of these algorithms in FIPS mode .. yet
+    SUPPRESS_ED25519=1
+    SUPPRESS_ED448=1
+    SUPPRESS_X25519=1
+    SUPPRESS_X448=1
+    SUPPRESS_ML_DSA=1
+    SUPPRESS_ML_KEM=1
+    SUPPRESS_SLH_DSA=1
 
     # The FIPS does not allow the RSA-PKCS1.5 encryption
     SUPPORT_RSA_PKCS1_ENCRYPTION=0
@@ -106,6 +125,14 @@ else
     exit 1
 fi
 
+check_algorithm_support "ED25519" "EDDSA" "mechtype-0x1057" "EC-EDWARDS-KEY-PAIR-GEN" "mechtype-0x1055"
+check_algorithm_support "ED448" "EDDSA" "mechtype-0x1057" "EC-EDWARDS-KEY-PAIR-GEN" "mechtype-0x1055"
+check_algorithm_support "X25519" "ECDH1-DERIVE" "mechtype-0x1050" "EC-MONTGOMERY-KEY-PAIR-GEN" "mechtype-0x1050"
+check_algorithm_support "X448" "ECDH1-DERIVE" "mechtype-0x1050" "EC-MONTGOMERY-KEY-PAIR-GEN" "mechtype-0x1050"
+check_algorithm_support "ML_DSA" "ML-DSA" "mechtype-0x1D" "ML-DSA-KEY-PAIR-GEN" "mechtype-0x1C"
+check_algorithm_support "ML_KEM" "ML-KEM" "mechtype-0x17" "ML-KEM-KEY-PAIR-GEN" "mechtype-0xF"
+check_algorithm_support "SLH_DSA" "SLH-DSA" "mechtype-0x2E" "SLH-DSA-KEY-PAIR-GEN" "mechtype-0x2D"
+
 if [[ "${PKCS11_PROVIDER_FORCE_FIPS_MODE}" = "1" ]]; then
     # temporarily suppress symmetric tests in FIPS mode as no FIPS provider
     # supports SKEYMGMT yet.
@@ -139,6 +166,12 @@ sed -e "s|@libtoollibs@|${LIBSPATH}|g" \
     -e "s|@PINFILE@|${PINFILE}|g" \
     -e "s|##TOKENOPTIONS|${TOKENOPTIONS}|g" \
     "${TESTSSRCDIR}/openssl.cnf.in" > "${OPENSSL_CONF}"
+BASE_OPENSSL_CONF=$OPENSSL_CONF
+
+# prepare also a config version that enables uri-to-pem
+sed -e "s/#pkcs11-module-encode-provider-uri-to-pem/pkcs11-module-encode-provider-uri-to-pem = true/" \
+    "${OPENSSL_CONF}" > "${OPENSSL_CONF}.uri_to_pem"
+URIPEM_OPENSSL_CONF=${OPENSSL_CONF}.uri_to_pem
 
 # setup configuration that forces all operations on token here
 BLOCKED_OPERATIONS="digest"
@@ -173,6 +206,30 @@ crt_selfsign() {
     ossl "${OPENSSL_CMD}" 2>&1
     ptool --write-object "${TMPPDIR}/${LABEL}.crt" --type=cert --id="$KEYID" \
           --label="$LABEL" 2>&1
+}
+
+gen_keypair() {
+    local mode="$1"
+    local ptool_type="$2"
+    local ossl_alg="$3"
+    local label="$4"
+    local id="$5"
+    local uri_id="$6"
+
+    if [ "$mode" -eq 1 ]; then
+        ptool --keypairgen --key-type="${ptool_type}" --id="${id}" \
+            --label="${label}" 2>&1
+    elif [ "$mode" -eq 2 ]; then
+        OPENSSL_CONF=${URIPEM_OPENSSL_CONF}
+        ossl "
+        genpkey -propquery \"provider=pkcs11\"
+                -algorithm ${ossl_alg}
+                -pkeyopt \"pkcs11_uri:pkcs11:object=${label};id=${uri_id}\""
+        OPENSSL_CONF=${BASE_OPENSSL_CONF}
+    else
+        echo "Bad value for key gen mode: $mode"
+        exit 1
+    fi
 }
 
 title LINE "Creating new Self Sign CA"
@@ -305,13 +362,13 @@ echo ""
 
 
 ## Softtokn does not support edwards curves yet
-if [ "${SUPPORT_ED25519}" -eq 1 ]; then
+if [ "$SUPPORT_ED25519_KEY_GEN" -ne 0 ]; then
     # generate ED25519
     get_next_keyid
     EDCRTN="edCert"
 
-    ptool --keypairgen --key-type="EC:edwards25519" --id="$KEYID" \
-    	  --label="${EDCRTN}" 2>&1
+    gen_keypair "$SUPPORT_ED25519_KEY_GEN" "EC:edwards25519" "ED25519" \
+                "${EDCRTN}" "${KEYID}" "${URIKEYID}"
     ca_sign $EDCRTN "My ED25519 Cert" "$KEYID"
 
     EDBASEURIWITHPINVALUE="pkcs11:id=${URIKEYID};pin-value=${PINVALUE}"
@@ -330,13 +387,13 @@ if [ "${SUPPORT_ED25519}" -eq 1 ]; then
     echo "${EDCRTURI}"
 fi
 
-if [ "${SUPPORT_ED448}" -eq 1 ]; then
+if [ "$SUPPORT_ED448_KEY_GEN" -ne 0 ]; then
     # generate ED448
     get_next_keyid
     ED2CRTN="ed2Cert"
 
-    ptool --keypairgen --key-type="EC:Ed448" --id="$KEYID" \
-          --label="${ED2CRTN}" 2>&1
+    gen_keypair "$SUPPORT_ED448_KEY_GEN" "EC:Ed448" "ED448" \
+                "${ED2CRTN}" "${KEYID}" "${URIKEYID}"
     ca_sign $ED2CRTN "My ED448 Cert" "$KEYID"
 
     ED2BASEURIWITHPINVALUE="pkcs11:id=${URIKEYID};pin-value=${PINVALUE}"
@@ -355,12 +412,13 @@ if [ "${SUPPORT_ED448}" -eq 1 ]; then
     echo "${ED2CRTURI}"
 fi
 
-if [ "${SUPPORT_X25519}" -eq 1 ]; then
+if [ "$SUPPORT_X25519_KEY_GEN" -ne 0 ]; then
     # generate X25519
     get_next_keyid
+    TSTCRTN="x25519 key"
 
-    ptool --keypairgen --key-type="EC:X25519" --id="$KEYID" \
-    	  --label="x25519 key" 2>&1
+    gen_keypair "$SUPPORT_X25519_KEY_GEN" "EC:X25519" "X25519" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
 
     X25519BASEURIWITHPINVALUE="pkcs11:id=${URIKEYID};pin-value=${PINVALUE}"
     X25519BASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID};pin-source=file:${PINFILE}"
@@ -377,9 +435,10 @@ if [ "${SUPPORT_X25519}" -eq 1 ]; then
 
     # And a Peer Key for Key Exchange (ECDH) tests
     get_next_keyid
+    TSTCRTN="x25519 key"
 
-    ptool --keypairgen --key-type="EC:X25519" --id="$KEYID" \
-    	  --label="x25519 key" 2>&1
+    gen_keypair "$SUPPORT_X25519_KEY_GEN" "EC:X25519" "X25519" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
 
     X25519PEERPUBURI="pkcs11:type=public;id=${URIKEYID}"
     X25519PEERPRIURI="pkcs11:type=private;id=${URIKEYID}"
@@ -389,12 +448,13 @@ if [ "${SUPPORT_X25519}" -eq 1 ]; then
     echo "${X25519PEERPRIURI}"
 fi
 
-if [ "${SUPPORT_X448}" -eq 1 ]; then
+if [ "$SUPPORT_X448_KEY_GEN" -ne 0 ]; then
     # generate X448
     get_next_keyid
+    TSTCRTN="x448 key"
 
-    ptool --keypairgen --key-type="EC:X448" --id="$KEYID" \
-    	  --label="x448 key" 2>&1
+    gen_keypair "$SUPPORT_X448_KEY_GEN" "EC:X448" "X448" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
 
     X448BASEURIWITHPINVALUE="pkcs11:id=${URIKEYID};pin-value=${PINVALUE}"
     X448BASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID};pin-source=file:${PINFILE}"
@@ -411,9 +471,10 @@ if [ "${SUPPORT_X448}" -eq 1 ]; then
 
     # And a Peer Key for Key Exchange (ECDH) tests
     get_next_keyid
+    TSTCRTN="x448 key"
 
-    ptool --keypairgen --key-type="EC:X448" --id="$KEYID" \
-    	  --label="x448 key" 2>&1
+    gen_keypair "$SUPPORT_X448_KEY_GEN" "EC:X448" "X448" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
 
     X448PEERPUBURI="pkcs11:type=public;id=${URIKEYID}"
     X448PEERPRIURI="pkcs11:type=private;id=${URIKEYID}"
@@ -575,25 +636,13 @@ if [ "${SUPPORT_ALLOWED_MECHANISMS}" -eq 1 ]; then
     echo ""
 fi
 
-if [ "$SUPPORT_ML_DSA" -eq 1 ]; then
+if [ "$SUPPORT_ML_DSA_KEY_GEN" -ne 0 ]; then
     title PARA "generate ML-DSA Key pair"
     get_next_keyid
     TSTCRTN="mlDsa"
 
-    # not supported by the pkcs11-tool yet. Do it for now with OpenSSL CLI
-    # ptool --keypairgen --key-type="ML-DSA-44" --id="$KEYID" \
-    #       --label="${TSTCRTN}" 2>&1
-    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
-    # We need to configure pkcs11 to allow emitting PEM URIs so that the
-    # genpkey command does not fail on trying to emit the private key PEM file.
-    sed -e "s/#pkcs11-module-encode-provider-uri-to-pem/pkcs11-module-encode-provider-uri-to-pem = true/" \
-        "${OPENSSL_CONF}" > "${OPENSSL_CONF}.mldsa_pem_uri"
-    OPENSSL_CONF=${OPENSSL_CONF}.mldsa_pem_uri
-    ossl '
-    genpkey -propquery "provider=pkcs11"
-            -algorithm ML-DSA-44
-            -pkeyopt "pkcs11_uri:pkcs11:object=${TSTCRTN};id=${URIKEYID}"'
-    OPENSSL_CONF=${ORIG_OPENSSL_CONF}
+    gen_keypair "$SUPPORT_ML_DSA_KEY_GEN" "ML-DSA-44" "ML-DSA-44" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
     ca_sign $TSTCRTN "My ML-DSA Cert" "$KEYID"
 
     MLDSABASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
@@ -611,23 +660,13 @@ if [ "$SUPPORT_ML_DSA" -eq 1 ]; then
     echo ""
 fi
 
-if [ "$SUPPORT_ML_KEM" -eq 1 ]; then
+if [ "$SUPPORT_ML_KEM_KEY_GEN" -ne 0 ]; then
     title PARA "generate ML-KEM Key pair"
     get_next_keyid
     TSTCRTN="mlKem"
 
-    # not supported by the pkcs11-tool yet. Do it for now with OpenSSL CLI
-    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
-    # We need to configure pkcs11 to allow emitting PEM URIs so that the
-    # genpkey command does not fail on trying to emit the private key PEM file.
-    sed -e "s/#pkcs11-module-encode-provider-uri-to-pem/pkcs11-module-encode-provider-uri-to-pem = true/" \
-        "${OPENSSL_CONF}" > "${OPENSSL_CONF}.mlkem_pem_uri"
-    OPENSSL_CONF=${OPENSSL_CONF}.mlkem_pem_uri
-    ossl '
-    genpkey -propquery "provider=pkcs11"
-            -algorithm ML-KEM-512
-            -pkeyopt "pkcs11_uri:pkcs11:object=${TSTCRTN};id=${URIKEYID}"'
-    OPENSSL_CONF=${ORIG_OPENSSL_CONF}
+    gen_keypair "$SUPPORT_ML_KEM_KEY_GEN" "ML-KEM-768" "ML-KEM-768" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
 
     MLKEMBASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
     MLKEMBASEURIWITHPINSOURCE="pkcs11:id=${URIKEYID}?pin-source=file:${PINFILE}"
@@ -642,25 +681,13 @@ if [ "$SUPPORT_ML_KEM" -eq 1 ]; then
     echo ""
 fi
 
-if [ "$SUPPORT_SLH_DSA" -eq 1 ]; then
+if [ "$SUPPORT_SLH_DSA_KEY_GEN" -ne 0 ]; then
     title PARA "generate SLH-DSA Key pair"
     get_next_keyid
     TSTCRTN="slhDsa"
 
-    # not supported by the pkcs11-tool yet. Do it for now with OpenSSL CLI
-    # ptool --keypairgen --key-type="SLH-DSA-SHAKE-128S" --id="$KEYID" \
-    #       --label="${TSTCRTN}" 2>&1
-    ORIG_OPENSSL_CONF=${OPENSSL_CONF}
-    # We need to configure pkcs11 to allow emitting PEM URIs so that the
-    # genpkey command does not fail on trying to emit the private key PEM file.
-    sed -e "s/#pkcs11-module-encode-provider-uri-to-pem/pkcs11-module-encode-provider-uri-to-pem = true/" \
-        "${OPENSSL_CONF}" > "${OPENSSL_CONF}.slhdsa_pem_uri"
-    OPENSSL_CONF=${OPENSSL_CONF}.slhdsa_pem_uri
-    ossl '
-    genpkey -propquery "provider=pkcs11"
-            -algorithm SLH-DSA-SHAKE-128s
-            -pkeyopt "pkcs11_uri:pkcs11:object=${TSTCRTN};id=${URIKEYID}"'
-    OPENSSL_CONF=${ORIG_OPENSSL_CONF}
+    gen_keypair "$SUPPORT_SLH_DSA_KEY_GEN" "SLH-DSA-SHAKE-128S" "SLH-DSA-SHAKE-128s" \
+                "${TSTCRTN}" "${KEYID}" "${URIKEYID}"
     ca_sign $TSTCRTN "My SLH-DSA Cert" "$KEYID"
 
     SLHDSABASEURIWITHPINVALUE="pkcs11:id=${URIKEYID}?pin-value=${PINVALUE}"
@@ -689,6 +716,7 @@ ${TOKENCONFIGVARS}
 export P11LIB="${P11LIB}"
 export TOKENTYPE="${TOKENTYPE}"
 export TOKENLABEL="${TOKENLABEL}"
+export TOKENLABELURI="${TOKENLABELURI}"
 export PKCS11_PROVIDER_MODULE=${P11LIB}
 export PPDBGFILE=${TMPPDIR}/p11prov-debug.log
 export PKCS11_PROVIDER_DEBUG="file:${TMPPDIR}/p11prov-debug.log"

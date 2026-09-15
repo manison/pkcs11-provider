@@ -514,8 +514,10 @@ static int cmp_bn_attr(P11PROV_OBJ *key1, P11PROV_OBJ *key2,
         return rc;
     }
 
-    bx1 = BN_native2bn(x1->pValue, x1->ulValueLen, NULL);
-    bx2 = BN_native2bn(x2->pValue, x2->ulValueLen, NULL);
+    /* PKCS#11 values, like modulus and public exponent, are of type "Big
+       integer", unsigned integer most-significant byte first. */
+    bx1 = BN_bin2bn(x1->pValue, x1->ulValueLen, NULL);
+    bx2 = BN_bin2bn(x2->pValue, x2->ulValueLen, NULL);
 
     if (BN_cmp(bx1, bx2) == 0) {
         rc = RET_OSSL_OK;
@@ -1014,6 +1016,9 @@ P11PROV_OBJ *p11prov_obj_pub_from_priv(P11PROV_OBJ *priv)
     }
 
     key->data.key = priv->data.key;
+    key->get_template = priv->get_template;
+    key->free_template = priv->free_template;
+    key->get_find_attrs = priv->get_find_attrs;
 
     /* make sure key is associated to the private one */
     p11prov_obj_set_associated(priv, key);

@@ -34,8 +34,10 @@ Files: .github/*
        tests/cert.json.ecdsa.in
        tests/cert.json.ed25519.in
        tests/cert.json.ed448.in
+       tests/fork-data.*
        scripts/clean-dist.sh
        scripts/coverage_report.sh
+       scripts/coverage/*
        .lcovrc
 Copyright: (C) 2022 - 2026 Simo Sorce <simo@redhat.com>
 License: Apache-2.0

@@ -12,27 +12,66 @@
 #define DISPATCH_SKEYMGMT_FN(type, name) \
     DECL_DISPATCH_FUNC(skeymgmt, p11prov_##type, name)
 
-DISPATCH_SKEYMGMT_FN(aes, free);
-DISPATCH_SKEYMGMT_FN(aes, import);
-DISPATCH_SKEYMGMT_FN(aes, export);
-DISPATCH_SKEYMGMT_FN(aes, generate);
-DISPATCH_SKEYMGMT_FN(aes, get_key_id);
-DISPATCH_SKEYMGMT_FN(aes, gen_settable_params);
-DISPATCH_SKEYMGMT_FN(aes, imp_settable_params);
+#define DISPATCH_SKEYMGMT_ELEM(type, NAME, name) \
+    { OSSL_FUNC_SKEYMGMT_##NAME, (void (*)(void))p11prov_##type##_##name }
 
-static void p11prov_aes_free(void *key)
+DISPATCH_SKEYMGMT_FN(common, free);
+DISPATCH_SKEYMGMT_FN(common, export);
+DISPATCH_SKEYMGMT_FN(common, get_key_id);
+DISPATCH_SKEYMGMT_FN(common, gen_settable_params);
+DISPATCH_SKEYMGMT_FN(common, imp_settable_params);
+
+DISPATCH_SKEYMGMT_FN(aes, import);
+DISPATCH_SKEYMGMT_FN(aes, generate);
+
+DISPATCH_SKEYMGMT_FN(chacha20, import);
+DISPATCH_SKEYMGMT_FN(chacha20, generate);
+
+DISPATCH_SKEYMGMT_FN(generic_secret, import);
+DISPATCH_SKEYMGMT_FN(generic_secret, generate);
+
+static void p11prov_common_free(void *key)
 {
-    P11PROV_debug("aes free %p", key);
+    P11PROV_debug("skey free %p", key);
     p11prov_obj_free((P11PROV_OBJ *)key);
 }
 
-static void *p11prov_aes_import(void *provctx, int selection,
-                                const OSSL_PARAM params[])
+static const char *p11prov_common_get_key_id(void *keydata)
+{
+    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+
+    return p11prov_obj_get_public_uri(key);
+}
+
+static const OSSL_PARAM common_import_params[] = {
+    OSSL_PARAM_octet_string(OSSL_SKEY_PARAM_RAW_BYTES, NULL, 0),
+    OSSL_PARAM_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE, NULL, 0), OSSL_PARAM_END
+};
+
+static const OSSL_PARAM *p11prov_common_imp_settable_params(void *provctx)
+{
+    return common_import_params;
+}
+
+static const OSSL_PARAM common_generate_params[] = {
+    OSSL_PARAM_size_t(OSSL_SKEY_PARAM_KEY_LENGTH, NULL),
+    OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
+    OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_USAGE, NULL, 0),
+    OSSL_PARAM_int(P11PROV_PARAM_EPHEMERAL, NULL), OSSL_PARAM_END
+};
+
+static const OSSL_PARAM *p11prov_common_gen_settable_params(void *provctx)
+{
+    return common_generate_params;
+}
+
+static void *p11prov_common_import(void *provctx, CK_KEY_TYPE type,
+                                   int selection, const OSSL_PARAM params[])
 {
     P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
     const OSSL_PARAM *p;
 
-    P11PROV_debug("aes import");
+    P11PROV_debug("skey import (type: %lu)", type);
 
     if (!ctx) {
         return NULL;
@@ -54,7 +93,7 @@ static void *p11prov_aes_import(void *provctx, int selection,
             P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Invalid data");
             return NULL;
         }
-        return p11prov_obj_import_secret_key(ctx, CKK_AES, key, keylen);
+        return p11prov_obj_import_secret_key(ctx, type, key, keylen);
     }
 
     p = OSSL_PARAM_locate_const(params, OSSL_OBJECT_PARAM_REFERENCE);
@@ -67,8 +106,7 @@ static void *p11prov_aes_import(void *provctx, int selection,
             P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Invalid data");
             return NULL;
         }
-        return p11prov_obj_from_typed_reference(reference, reference_sz,
-                                                CKK_AES);
+        return p11prov_obj_from_typed_reference(reference, reference_sz, type);
     }
 
     /* Not a digestible secret key */
@@ -76,15 +114,23 @@ static void *p11prov_aes_import(void *provctx, int selection,
     return NULL;
 }
 
-static int p11prov_aes_export(void *keydata, int selection,
-                              OSSL_CALLBACK *param_cb, void *cbarg)
+static void *p11prov_aes_import(void *provctx, int selection,
+                                const OSSL_PARAM params[])
 {
-    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+    return p11prov_common_import(provctx, CKK_AES, selection, params);
+}
 
-    P11PROV_raise(p11prov_obj_get_prov_ctx(key), CKR_KEY_FUNCTION_NOT_PERMITTED,
-                  "Not exportable");
+static void *p11prov_chacha20_import(void *provctx, int selection,
+                                     const OSSL_PARAM params[])
+{
+    return p11prov_common_import(provctx, CKK_CHACHA20, selection, params);
+}
 
-    return RET_OSSL_ERR;
+static void *p11prov_generic_secret_import(void *provctx, int selection,
+                                           const OSSL_PARAM params[])
+{
+    return p11prov_common_import(provctx, CKK_GENERIC_SECRET, selection,
+                                 params);
 }
 
 static int p11prov_cipher_usage_to_flags(const char *usage, CK_FLAGS *flags)
@@ -128,254 +174,8 @@ static int p11prov_cipher_usage_to_flags(const char *usage, CK_FLAGS *flags)
     return CKR_OK;
 }
 
-static void *p11prov_aes_generate(void *provctx, const OSSL_PARAM params[])
-{
-    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
-    CK_MECHANISM mech = {
-        .mechanism = CKM_AES_KEY_GEN,
-        .pParameter = NULL,
-        .ulParameterLen = 0,
-    };
-    CK_BBOOL tokenobj = false;
-    CK_ULONG keylen = 32; /* default to 256 bit */
-    CK_ATTRIBUTE tmpl[12] = {
-        { CKA_TOKEN, &tokenobj, sizeof(tokenobj) },
-        { CKA_VALUE_LEN, &keylen, sizeof(keylen) },
-        { 0 },
-    };
-    size_t tmax = sizeof(tmpl) / sizeof(CK_ATTRIBUTE);
-    size_t tsize = 2;
-    P11PROV_URI *uri = NULL;
-    int ephemeral = 1; /* by default we create session keys */
-    /* all flags by default */
-    CK_FLAGS usage = CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY
-                     | CKF_WRAP | CKF_UNWRAP | CKF_DERIVE;
-    const OSSL_PARAM *p;
-    CK_SLOT_ID slotid = CK_UNAVAILABLE_INFORMATION;
-    CK_RV rv = CKR_MECHANISM_PARAM_INVALID;
-    P11PROV_SESSION *session = NULL;
-    CK_OBJECT_HANDLE key_handle = CK_INVALID_HANDLE;
-    P11PROV_OBJ *key = NULL;
-    int ret;
-
-    P11PROV_debug("aes generate");
-
-    if (!ctx) {
-        return NULL;
-    }
-
-    /* CKA_ID and CKA_LABEL from template URI */
-    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_URI);
-    if (p) {
-        const char *puri = NULL;
-        ret = OSSL_PARAM_get_utf8_string_ptr(p, &puri);
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, rv, "Invalid uri parameter type");
-            goto done;
-        }
-        uri = p11prov_parse_uri(ctx, puri);
-        if (!uri) {
-            goto done;
-        }
-
-        /* Id */
-        tmpl[tsize] = p11prov_uri_get_id(uri);
-        if (tmpl[tsize].ulValueLen != 0) tsize++;
-        /* Label */
-        tmpl[tsize] = p11prov_uri_get_label(uri);
-        if (tmpl[tsize].ulValueLen != 0) tsize++;
-    }
-
-    /* Key length */
-    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_KEY_LENGTH);
-    if (p) {
-        size_t len;
-        ret = OSSL_PARAM_get_size_t(p, &len);
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, rv, "Invalid key length parameter type");
-            goto done;
-        }
-        if (len != 16 && len != 24 && len != 32) {
-            P11PROV_raise(ctx, rv, "Invalid key length parameter value");
-            goto done;
-        }
-        keylen = len;
-    }
-
-    /* Session or Token key ? */
-    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_EPHEMERAL);
-    if (p) {
-        ret = OSSL_PARAM_get_int(p, &ephemeral);
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, rv, "Invalid ephemeral parameter type");
-            goto done;
-        }
-        if (ephemeral != 0 && ephemeral != 1) {
-            P11PROV_raise(ctx, rv, "Invalid ephemeral parameter value");
-            goto done;
-        }
-    }
-
-    if (!ephemeral) {
-        tokenobj = true;
-    }
-
-    /* Key Usage */
-    p = OSSL_PARAM_locate_const(params, P11PROV_PARAM_KEY_USAGE);
-    if (p) {
-        const char *key_usage = NULL;
-        ret = OSSL_PARAM_get_utf8_string_ptr(p, &key_usage);
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, rv, "Invalid key usage parameter type");
-            goto done;
-        }
-        rv = p11prov_cipher_usage_to_flags(key_usage, &usage);
-        if (rv != CKR_OK) {
-            P11PROV_raise(ctx, rv, "Invalid key usage parameter value");
-            goto done;
-        }
-    }
-
-    rv = p11prov_usage_to_template(tmpl, &tsize, tmax, usage);
-    if (rv != CKR_OK) {
-        P11PROV_raise(ctx, rv, "Failed to set key usage parameters");
-        goto done;
-    }
-
-    rv = p11prov_get_session(ctx, &slotid, NULL, uri, mech.mechanism, NULL,
-                             NULL, true, true, &session);
-    if (rv != CKR_OK) {
-        P11PROV_raise(ctx, rv, "Failed to get PKCS#11 session");
-        goto done;
-    }
-
-    rv = p11prov_GenerateKey(ctx, p11prov_session_handle(session), &mech, tmpl,
-                             tsize, &key_handle);
-    if (rv != CKR_OK) {
-        goto done;
-    }
-
-    rv = p11prov_obj_from_handle(ctx, session, key_handle, &key);
-    if (rv != CKR_OK) {
-        goto done;
-    }
-
-done:
-    p11prov_return_session(session);
-    p11prov_uri_free(uri);
-    return key;
-}
-
-static const char *p11prov_aes_get_key_id(void *keydata)
-{
-    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
-
-    return p11prov_obj_get_public_uri(key);
-}
-
-static const OSSL_PARAM aes_import_params[] = {
-    OSSL_PARAM_octet_string(OSSL_SKEY_PARAM_RAW_BYTES, NULL, 0),
-    OSSL_PARAM_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE, NULL, 0), OSSL_PARAM_END
-};
-
-static const OSSL_PARAM *p11prov_aes_imp_settable_params(void *provctx)
-{
-    return aes_import_params;
-}
-
-static const OSSL_PARAM aes_generate_params[] = {
-    OSSL_PARAM_size_t(OSSL_SKEY_PARAM_KEY_LENGTH, NULL),
-    OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
-    OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_USAGE, NULL, 0),
-    OSSL_PARAM_int(P11PROV_PARAM_EPHEMERAL, NULL), OSSL_PARAM_END
-};
-
-static const OSSL_PARAM *p11prov_aes_gen_settable_params(void *provctx)
-{
-    return aes_generate_params;
-}
-
-#define DISPATCH_SKEYMGMT_ELEM(type, NAME, name) \
-    { OSSL_FUNC_SKEYMGMT_##NAME, (void (*)(void))p11prov_##type##_##name }
-
-const OSSL_DISPATCH p11prov_aes_functions[] = {
-    DISPATCH_SKEYMGMT_ELEM(aes, FREE, free),
-    DISPATCH_SKEYMGMT_ELEM(aes, IMPORT, import),
-    DISPATCH_SKEYMGMT_ELEM(aes, EXPORT, export),
-    DISPATCH_SKEYMGMT_ELEM(aes, GENERATE, generate),
-    DISPATCH_SKEYMGMT_ELEM(aes, GET_KEY_ID, get_key_id),
-    DISPATCH_SKEYMGMT_ELEM(aes, IMP_SETTABLE_PARAMS, imp_settable_params),
-    DISPATCH_SKEYMGMT_ELEM(aes, GEN_SETTABLE_PARAMS, gen_settable_params),
-    { 0, NULL },
-};
-
-DISPATCH_SKEYMGMT_FN(generic_secret, free);
-DISPATCH_SKEYMGMT_FN(generic_secret, import);
-DISPATCH_SKEYMGMT_FN(generic_secret, export);
-DISPATCH_SKEYMGMT_FN(generic_secret, generate);
-DISPATCH_SKEYMGMT_FN(generic_secret, get_key_id);
-DISPATCH_SKEYMGMT_FN(generic_secret, gen_settable_params);
-DISPATCH_SKEYMGMT_FN(generic_secret, imp_settable_params);
-
-static void p11prov_generic_secret_free(void *key)
-{
-    P11PROV_debug("generic_secret free %p", key);
-    p11prov_obj_free((P11PROV_OBJ *)key);
-}
-
-static void *p11prov_generic_secret_import(void *provctx, int selection,
-                                           const OSSL_PARAM params[])
-{
-    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
-    const OSSL_PARAM *p;
-
-    P11PROV_debug("generic_secret import");
-
-    if (!ctx) {
-        return NULL;
-    }
-
-    if (!(selection & OSSL_SKEYMGMT_SELECT_SECRET_KEY)) {
-        /* TODO: check for hack import uri */
-        return NULL;
-    }
-
-    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_RAW_BYTES);
-    if (p) {
-        unsigned char *key = NULL;
-        size_t keylen = 0;
-        int ret =
-            OSSL_PARAM_get_octet_string_ptr(p, (const void **)&key, &keylen);
-
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Invalid data");
-            return NULL;
-        }
-        return p11prov_obj_import_secret_key(ctx, CKK_GENERIC_SECRET, key,
-                                             keylen);
-    }
-
-    p = OSSL_PARAM_locate_const(params, OSSL_OBJECT_PARAM_REFERENCE);
-    if (p) {
-        const void *reference = NULL;
-        size_t reference_sz = 0;
-        int ret = OSSL_PARAM_get_octet_string_ptr(p, &reference, &reference_sz);
-
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Invalid data");
-            return NULL;
-        }
-        return p11prov_obj_from_typed_reference(reference, reference_sz,
-                                                CKK_GENERIC_SECRET);
-    }
-
-    /* Not a digestible secret key */
-    P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Required params are missing");
-    return NULL;
-}
-
-static int p11prov_generic_secret_export(void *keydata, int selection,
-                                         OSSL_CALLBACK *param_cb, void *cbarg)
+static int p11prov_common_export(void *keydata, int selection,
+                                 OSSL_CALLBACK *param_cb, void *cbarg)
 {
     P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
     P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(key);
@@ -384,6 +184,10 @@ static int p11prov_generic_secret_export(void *keydata, int selection,
     CK_ATTRIBUTE *sensitive_attr;
     CK_BBOOL extractable = CK_FALSE;
     CK_BBOOL sensitive = CK_TRUE;
+
+    if (!key) {
+        return RET_OSSL_ERR;
+    }
 
     cached_value_attr = p11prov_obj_get_attr(key, CKA_VALUE);
     if (cached_value_attr) {
@@ -487,23 +291,20 @@ static int p11prov_generic_secret_export(void *keydata, int selection,
         return ret;
     }
 
-    P11PROV_raise(p11prov_obj_get_prov_ctx(key), CKR_KEY_FUNCTION_NOT_PERMITTED,
-                  "Not exportable");
-
     return RET_OSSL_ERR;
 }
 
-static void *p11prov_generic_secret_generate(void *provctx,
-                                             const OSSL_PARAM params[])
+static void *p11prov_common_generate(void *provctx, CK_MECHANISM_TYPE mech_type,
+                                     CK_ULONG keylen, CK_FLAGS default_usage,
+                                     const OSSL_PARAM params[])
 {
     P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
     CK_MECHANISM mech = {
-        .mechanism = CKM_GENERIC_SECRET_KEY_GEN,
+        .mechanism = mech_type,
         .pParameter = NULL,
         .ulParameterLen = 0,
     };
     CK_BBOOL tokenobj = false;
-    CK_ULONG keylen = 32; /* default to 256 bit */
     CK_ATTRIBUTE tmpl[12] = {
         { CKA_TOKEN, &tokenobj, sizeof(tokenobj) },
         { CKA_VALUE_LEN, &keylen, sizeof(keylen) },
@@ -513,8 +314,7 @@ static void *p11prov_generic_secret_generate(void *provctx,
     size_t tsize = 2;
     P11PROV_URI *uri = NULL;
     int ephemeral = 1; /* by default we create session keys */
-    /* Generally Generic Secrets can only be used in derive-like functions */
-    CK_FLAGS usage = CKF_DERIVE;
+    CK_FLAGS usage = default_usage;
     const OSSL_PARAM *p;
     CK_SLOT_ID slotid = CK_UNAVAILABLE_INFORMATION;
     CK_RV rv = CKR_MECHANISM_PARAM_INVALID;
@@ -522,8 +322,6 @@ static void *p11prov_generic_secret_generate(void *provctx,
     CK_OBJECT_HANDLE key_handle = CK_INVALID_HANDLE;
     P11PROV_OBJ *key = NULL;
     int ret;
-
-    P11PROV_debug("generic_secret generate");
 
     if (!ctx) {
         return NULL;
@@ -549,18 +347,6 @@ static void *p11prov_generic_secret_generate(void *provctx,
         /* Label */
         tmpl[tsize] = p11prov_uri_get_label(uri);
         if (tmpl[tsize].ulValueLen != 0) tsize++;
-    }
-
-    /* Key length */
-    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_KEY_LENGTH);
-    if (p) {
-        size_t len;
-        ret = OSSL_PARAM_get_size_t(p, &len);
-        if (ret != RET_OSSL_OK) {
-            P11PROV_raise(ctx, rv, "Invalid key length parameter type");
-            goto done;
-        }
-        keylen = len;
     }
 
     /* Session or Token key ? */
@@ -627,58 +413,153 @@ done:
     return key;
 }
 
-static const char *p11prov_generic_secret_get_key_id(void *keydata)
-{
-    P11PROV_OBJ *key = (P11PROV_OBJ *)keydata;
+/* all flags by default for ciphers */
+#define SKEY_DEFAULT_CIPHER_FLAGS \
+    (CKF_ENCRYPT | CKF_DECRYPT | CKF_SIGN | CKF_VERIFY | CKF_WRAP | CKF_UNWRAP \
+     | CKF_DERIVE)
 
-    return p11prov_obj_get_public_uri(key);
+static void *p11prov_aes_generate(void *provctx, const OSSL_PARAM params[])
+{
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    CK_ULONG keylen = 32; /* default to 256 bit */
+    const OSSL_PARAM *p;
+
+    P11PROV_debug("aes generate");
+
+    if (!ctx) {
+        return NULL;
+    }
+
+    /* Key length */
+    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_KEY_LENGTH);
+    if (p) {
+        size_t len;
+        int ret = OSSL_PARAM_get_size_t(p, &len);
+        if (ret != RET_OSSL_OK) {
+            P11PROV_raise(ctx, CKR_MECHANISM_PARAM_INVALID,
+                          "Invalid key length parameter type");
+            return NULL;
+        }
+        if (len != 16 && len != 24 && len != 32) {
+            P11PROV_raise(ctx, CKR_MECHANISM_PARAM_INVALID,
+                          "Invalid key length parameter value");
+            return NULL;
+        }
+        keylen = len;
+    }
+
+    return p11prov_common_generate(ctx, CKM_AES_KEY_GEN, keylen,
+                                   SKEY_DEFAULT_CIPHER_FLAGS, params);
 }
 
-static const OSSL_PARAM generic_secret_import_params[] = {
-    OSSL_PARAM_octet_string(OSSL_SKEY_PARAM_RAW_BYTES, NULL, 0),
-    OSSL_PARAM_octet_ptr(OSSL_OBJECT_PARAM_REFERENCE, NULL, 0), OSSL_PARAM_END
+static void *p11prov_chacha20_generate(void *provctx, const OSSL_PARAM params[])
+{
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    const OSSL_PARAM *p;
+
+    P11PROV_debug("chacha20 generate");
+
+    if (!ctx) {
+        return NULL;
+    }
+
+    /* ChaCha20 has a single, fixed key size (256 bits) -- unlike AES,
+     * there is nothing to select here. */
+    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_KEY_LENGTH);
+    if (p) {
+        size_t len;
+        int ret = OSSL_PARAM_get_size_t(p, &len);
+        if (ret != RET_OSSL_OK) {
+            P11PROV_raise(ctx, CKR_MECHANISM_PARAM_INVALID,
+                          "Invalid key length parameter type");
+            return NULL;
+        }
+        if (len != 32) {
+            P11PROV_raise(ctx, CKR_MECHANISM_PARAM_INVALID,
+                          "Invalid key length parameter value");
+            return NULL;
+        }
+    }
+
+    return p11prov_common_generate(ctx, CKM_CHACHA20_KEY_GEN, 32,
+                                   SKEY_DEFAULT_CIPHER_FLAGS, params);
+}
+
+static void *p11prov_generic_secret_generate(void *provctx,
+                                             const OSSL_PARAM params[])
+{
+    P11PROV_CTX *ctx = (P11PROV_CTX *)provctx;
+    CK_ULONG keylen = 32; /* default to 256 bit */
+    const OSSL_PARAM *p;
+
+    P11PROV_debug("generic_secret generate");
+
+    if (!ctx) {
+        return NULL;
+    }
+
+    /* Key length */
+    p = OSSL_PARAM_locate_const(params, OSSL_SKEY_PARAM_KEY_LENGTH);
+    if (p) {
+        size_t len;
+        int ret = OSSL_PARAM_get_size_t(p, &len);
+        if (ret != RET_OSSL_OK) {
+            P11PROV_raise(ctx, CKR_MECHANISM_PARAM_INVALID,
+                          "Invalid key length parameter type");
+            return NULL;
+        }
+        keylen = len;
+    }
+
+    /* Generally Generic Secrets can only be used in derive-like functions */
+    return p11prov_common_generate(ctx, CKM_GENERIC_SECRET_KEY_GEN, keylen,
+                                   CKF_DERIVE, params);
+}
+
+const OSSL_DISPATCH p11prov_aes_functions[] = {
+    DISPATCH_SKEYMGMT_ELEM(common, FREE, free),
+    DISPATCH_SKEYMGMT_ELEM(aes, IMPORT, import),
+    DISPATCH_SKEYMGMT_ELEM(common, EXPORT, export),
+    DISPATCH_SKEYMGMT_ELEM(aes, GENERATE, generate),
+    DISPATCH_SKEYMGMT_ELEM(common, GET_KEY_ID, get_key_id),
+    DISPATCH_SKEYMGMT_ELEM(common, IMP_SETTABLE_PARAMS, imp_settable_params),
+    DISPATCH_SKEYMGMT_ELEM(common, GEN_SETTABLE_PARAMS, gen_settable_params),
+    { 0, NULL },
 };
 
-static const OSSL_PARAM *
-p11prov_generic_secret_imp_settable_params(void *provctx)
-{
-    return generic_secret_import_params;
-}
-
-static const OSSL_PARAM generic_secret_generate_params[] = {
-    OSSL_PARAM_size_t(OSSL_SKEY_PARAM_KEY_LENGTH, NULL),
-    OSSL_PARAM_utf8_string(P11PROV_PARAM_URI, NULL, 0),
-    OSSL_PARAM_utf8_string(P11PROV_PARAM_KEY_USAGE, NULL, 0),
-    OSSL_PARAM_int(P11PROV_PARAM_EPHEMERAL, NULL), OSSL_PARAM_END
+const OSSL_DISPATCH p11prov_chacha20_functions[] = {
+    DISPATCH_SKEYMGMT_ELEM(common, FREE, free),
+    DISPATCH_SKEYMGMT_ELEM(chacha20, IMPORT, import),
+    DISPATCH_SKEYMGMT_ELEM(common, EXPORT, export),
+    DISPATCH_SKEYMGMT_ELEM(chacha20, GENERATE, generate),
+    DISPATCH_SKEYMGMT_ELEM(common, GET_KEY_ID, get_key_id),
+    DISPATCH_SKEYMGMT_ELEM(common, IMP_SETTABLE_PARAMS, imp_settable_params),
+    DISPATCH_SKEYMGMT_ELEM(common, GEN_SETTABLE_PARAMS, gen_settable_params),
+    { 0, NULL },
 };
-
-static const OSSL_PARAM *
-p11prov_generic_secret_gen_settable_params(void *provctx)
-{
-    return generic_secret_generate_params;
-}
 
 const OSSL_DISPATCH p11prov_generic_secret_functions[] = {
-    DISPATCH_SKEYMGMT_ELEM(generic_secret, FREE, free),
+    DISPATCH_SKEYMGMT_ELEM(common, FREE, free),
     DISPATCH_SKEYMGMT_ELEM(generic_secret, IMPORT, import),
-    DISPATCH_SKEYMGMT_ELEM(generic_secret, EXPORT, export),
+    DISPATCH_SKEYMGMT_ELEM(common, EXPORT, export),
     DISPATCH_SKEYMGMT_ELEM(generic_secret, GENERATE, generate),
-    DISPATCH_SKEYMGMT_ELEM(generic_secret, GET_KEY_ID, get_key_id),
-    DISPATCH_SKEYMGMT_ELEM(generic_secret, IMP_SETTABLE_PARAMS,
-                           imp_settable_params),
-    DISPATCH_SKEYMGMT_ELEM(generic_secret, GEN_SETTABLE_PARAMS,
-                           gen_settable_params),
+    DISPATCH_SKEYMGMT_ELEM(common, GET_KEY_ID, get_key_id),
+    DISPATCH_SKEYMGMT_ELEM(common, IMP_SETTABLE_PARAMS, imp_settable_params),
+    DISPATCH_SKEYMGMT_ELEM(common, GEN_SETTABLE_PARAMS, gen_settable_params),
     { 0, NULL },
 };
 
 enum p11prov_skmgmt_algorithms {
     P11PROV_SKMGMT_AES = 0,
+    P11PROV_SKMGMT_CHACHA20,
     P11PROV_SKMGMT_GENERIC_SECRET,
     P11PROV_SKMGMT_NUM_ALGS
 };
 
 const OSSL_ALGORITHM skmgmt_algorithms[P11PROV_SKMGMT_NUM_ALGS] = {
     [P11PROV_SKMGMT_AES] = DEFAULT_ALGORITHM(AES, p11prov_aes_functions),
+    [P11PROV_SKMGMT_CHACHA20] =
+        DEFAULT_ALGORITHM(CHACHA20, p11prov_chacha20_functions),
     [P11PROV_SKMGMT_GENERIC_SECRET] =
         DEFAULT_ALGORITHM(GENERIC_SECRET, p11prov_generic_secret_functions),
 };
@@ -699,6 +580,8 @@ CK_RV p11prov_register_skmgmt(P11PROV_CTX *ctx, bool fips_property)
     }
 
     p11prov_assign_alg(&algs[i++], skmgmt_algorithms, P11PROV_SKMGMT_AES,
+                       property);
+    p11prov_assign_alg(&algs[i++], skmgmt_algorithms, P11PROV_SKMGMT_CHACHA20,
                        property);
     p11prov_assign_alg(&algs[i++], skmgmt_algorithms,
                        P11PROV_SKMGMT_GENERIC_SECRET, property);

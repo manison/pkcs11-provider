@@ -470,6 +470,36 @@ err:
     return ret;
 }
 
+static int p11prov_session_prompt_for_oob(struct p11prov_slot *slot)
+{
+    const char *info_string = "Please check your Hardware token for an out of "
+                              "band authentication request";
+    UI *ui = UI_new_method(NULL);
+    int ret;
+
+    P11PROV_debug("Starting internal OOB auth prompt slot=%p", slot);
+
+    if (ui == NULL) {
+        ret = RET_OSSL_ERR;
+        goto err;
+    }
+    ret = UI_dup_info_string(ui, info_string);
+    if (ret <= 0) {
+        ret = RET_OSSL_ERR;
+        goto err;
+    }
+
+    if (UI_process(ui)) {
+        ret = RET_OSSL_ERR;
+        goto err;
+    }
+
+    ret = RET_OSSL_OK;
+err:
+    UI_free(ui);
+    return ret;
+}
+
 static CK_RV check_pin_flags_ok(P11PROV_CTX *ctx, CK_SLOT_ID slotid)
 {
     CK_TOKEN_INFO token;
@@ -588,6 +618,13 @@ static CK_RV token_login(P11PROV_SESSION *session, P11PROV_URI *uri,
     }
 
     P11PROV_debug("Attempt Login on session %lu", session->session);
+    if (token->flags & CKF_PROTECTED_AUTHENTICATION_PATH) {
+        int uiret = p11prov_session_prompt_for_oob(slot);
+        if (uiret != RET_OSSL_OK) {
+            P11PROV_debug("Failed to prompt for out of band authentication");
+        }
+    }
+
     /* Supports only USER login sessions for now */
     ret = p11prov_Login(session->provctx, session->session, user_type, pin,
                         pinlen);
@@ -942,10 +979,24 @@ done:
     return ret;
 }
 
-static bool check_skip_login(P11PROV_CTX *ctx, P11PROV_SLOT *slot)
+static bool needs_login(P11PROV_CTX *ctx, P11PROV_SLOT *slot, bool reqlogin)
 {
-    return p11prov_ctx_login_behavior(ctx) != PUBKEY_LOGIN_ALWAYS
-           && !p11prov_slot_check_req_login(slot);
+    /* Check if provider configuration forces login for all public key operations */
+    if (p11prov_ctx_login_behavior(ctx) == PUBKEY_LOGIN_ALWAYS) {
+        return true;
+    }
+
+    /* Check if login was requested by the caller for this operation */
+    if (!reqlogin) {
+        return false;
+    }
+
+    /* Check if the token/slot requires login (e.g. CKF_LOGIN_REQUIRED flag) */
+    if (p11prov_slot_check_req_login(slot)) {
+        return true;
+    }
+
+    return false;
 }
 
 /* There are three possible ways to call this function.
@@ -1004,8 +1055,7 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
         if (ret != CKR_OK) {
             goto done;
         }
-        if ((reqlogin && !check_skip_login(provctx, slot))
-            || p11prov_ctx_login_behavior(provctx) == PUBKEY_LOGIN_ALWAYS) {
+        if (needs_login(provctx, slot, reqlogin)) {
             ret = slot_login(slot, uri, pw_cb, pw_cbarg, reqlogin, NULL);
             if (ret != CKR_OK) {
                 goto done;
@@ -1039,8 +1089,7 @@ CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
                 /* keep going */
                 continue;
             }
-            if ((reqlogin && !check_skip_login(provctx, slot))
-                || p11prov_ctx_login_behavior(provctx) == PUBKEY_LOGIN_ALWAYS) {
+            if (needs_login(provctx, slot, reqlogin)) {
                 ret = slot_login(slot, uri, pw_cb, pw_cbarg, reqlogin, NULL);
                 if (ret != CKR_OK) {
                     /* keep going */

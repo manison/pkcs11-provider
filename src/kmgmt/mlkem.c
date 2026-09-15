@@ -4,7 +4,9 @@
 #include "provider.h"
 #include "kmgmt/internal.h"
 
-DISPATCH_KEYMGMT_FN(mlkem, new);
+DISPATCH_KEYMGMT_FN(mlkem_512, new);
+DISPATCH_KEYMGMT_FN(mlkem_768, new);
+DISPATCH_KEYMGMT_FN(mlkem_1024, new);
 DISPATCH_KEYMGMT_FN(mlkem_512, gen_init);
 DISPATCH_KEYMGMT_FN(mlkem_768, gen_init);
 DISPATCH_KEYMGMT_FN(mlkem_1024, gen_init);
@@ -12,18 +14,250 @@ DISPATCH_KEYMGMT_FN(mlkem, gen_settable_params);
 DISPATCH_KEYMGMT_FN(mlkem, gen);
 DISPATCH_KEYMGMT_FN(mlkem, load);
 DISPATCH_KEYMGMT_FN(mlkem, match);
+DISPATCH_KEYMGMT_FN(mlkem, import);
 DISPATCH_KEYMGMT_FN(mlkem, import_types);
 DISPATCH_KEYMGMT_FN(mlkem, export_types);
 DISPATCH_KEYMGMT_FN(mlkem, get_params);
 DISPATCH_KEYMGMT_FN(mlkem, gettable_params);
-DISPATCH_KEYMGMT_FN(mlkem_512, import);
-DISPATCH_KEYMGMT_FN(mlkem_768, import);
-DISPATCH_KEYMGMT_FN(mlkem_1024, import);
 
-static void *p11prov_mlkem_new(void *provctx)
+extern const CK_BBOOL val_true;
+extern const CK_BBOOL val_false;
+
+#define MLKEM_PUBKEY_TEMPLATE_SIZE 6
+#define MLKEM_PRIVKEY_TEMPLATE_SIZE 10
+_Static_assert(MLKEM_PUBKEY_TEMPLATE_SIZE <= P11PROV_PUBKEY_MAX_TEMPLATE_SIZE,
+               "ML-KEM public key template size exceeds maximum");
+_Static_assert(MLKEM_PRIVKEY_TEMPLATE_SIZE <= P11PROV_PRIVKEY_MAX_TEMPLATE_SIZE,
+               "ML-KEM private key template size exceeds maximum");
+
+static int p11prov_mlkem_get_template(P11PROV_OBJ *obj, CK_OBJECT_CLASS class,
+                                      const OSSL_PARAM *params,
+                                      CK_ATTRIBUTE *template)
 {
+    static const CK_OBJECT_CLASS pub_class = CKO_PUBLIC_KEY;
+    static const CK_OBJECT_CLASS priv_class = CKO_PRIVATE_KEY;
+    static const CK_KEY_TYPE mlkem_type = CKK_ML_KEM;
+    const OSSL_PARAM *p;
+    CK_ATTRIBUTE *a;
+    int cnt = 0;
+
+    if (!obj || !template || p11prov_obj_get_key_type(obj) != CKK_ML_KEM
+        || p11prov_obj_get_class(obj) != class) {
+        return -1;
+    }
+
+    template[cnt].type = CKA_KEY_TYPE;
+    template[cnt].pValue = DISCARD_CONST(&mlkem_type);
+    template[cnt].ulValueLen = sizeof(CK_KEY_TYPE);
+    cnt++;
+
+    template[cnt].type = CKA_TOKEN;
+    template[cnt].pValue = DISCARD_CONST(&val_false);
+    template[cnt].ulValueLen = sizeof(CK_BBOOL);
+    cnt++;
+
+    a = p11prov_obj_get_attr(obj, CKA_PARAMETER_SET);
+    if (!a) {
+        return -1;
+    }
+    template[cnt] = *a;
+    cnt++;
+
+    switch (class) {
+    case CKO_PUBLIC_KEY:
+        template[cnt].type = CKA_CLASS;
+        template[cnt].pValue = DISCARD_CONST(&pub_class);
+        template[cnt].ulValueLen = sizeof(CK_OBJECT_CLASS);
+        cnt++;
+
+        template[cnt].type = CKA_ENCAPSULATE;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        a = p11prov_obj_get_attr(obj, CKA_VALUE);
+        if (!a) {
+            return -1;
+        }
+        template[cnt] = *a;
+        cnt++;
+
+        return cnt;
+
+    case CKO_PRIVATE_KEY:
+        if (!params) {
+            return -1;
+        }
+
+        template[cnt].type = CKA_CLASS;
+        template[cnt].pValue = DISCARD_CONST(&priv_class);
+        template[cnt].ulValueLen = sizeof(CK_OBJECT_CLASS);
+        cnt++;
+
+        template[cnt].type = CKA_SENSITIVE;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        template[cnt].type = CKA_EXTRACTABLE;
+        template[cnt].pValue = DISCARD_CONST(&val_false);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        template[cnt].type = CKA_DECAPSULATE;
+        template[cnt].pValue = DISCARD_CONST(&val_true);
+        template[cnt].ulValueLen = sizeof(CK_BBOOL);
+        cnt++;
+
+        a = p11prov_obj_get_attr(obj, CKA_ID);
+        if (a) {
+            template[cnt] = *a;
+            cnt++;
+        }
+
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            return -1;
+        }
+        template[cnt].type = CKA_VALUE;
+        template[cnt].pValue = p->data;
+        template[cnt].ulValueLen = p->data_size;
+        cnt++;
+
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_ML_KEM_SEED);
+        if (p) {
+            template[cnt].type = CKA_SEED;
+            template[cnt].pValue = p->data;
+            template[cnt].ulValueLen = p->data_size;
+            cnt++;
+        }
+
+        return cnt;
+
+    default:
+        return -1;
+    }
+}
+
+static CK_RV p11prov_mlkem_get_find_attrs(
+    P11PROV_OBJ *obj, CK_OBJECT_CLASS class, const OSSL_PARAM *params,
+    CK_ATTRIBUTE attrs[], int *out_numattrs)
+{
+    P11PROV_CTX *ctx = p11prov_obj_get_prov_ctx(obj);
+    CK_ULONG param_set = p11prov_obj_get_key_param_set(obj);
+    const OSSL_PARAM *p;
+    int numattrs = 0;
+    CK_ULONG key_size;
+    CK_RV rv;
+
+    if (!obj || !params || !out_numattrs
+        || p11prov_obj_get_key_type(obj) != CKK_ML_KEM) {
+        return CKR_ARGUMENTS_BAD;
+    }
+
+    switch (param_set) {
+    case CKP_ML_KEM_512:
+        key_size = ML_KEM_512_PK_SIZE;
+        break;
+    case CKP_ML_KEM_768:
+        key_size = ML_KEM_768_PK_SIZE;
+        break;
+    case CKP_ML_KEM_1024:
+        key_size = ML_KEM_1024_PK_SIZE;
+        break;
+    default:
+        return CKR_KEY_INDIGESTIBLE;
+    }
+
+    switch (class) {
+    case CKO_PUBLIC_KEY:
+        rv = p11prov_kmgmt_params_to_attr(ctx, attrs, &numattrs, params,
+                                          OSSL_PKEY_PARAM_PUB_KEY, CKA_VALUE,
+                                          false);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        if (key_size != attrs[numattrs - 1].ulValueLen) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE,
+                          "Unexpected public key size %lu (expected %lu)",
+                          attrs[numattrs - 1].ulValueLen, key_size);
+            rv = CKR_KEY_INDIGESTIBLE;
+            goto done;
+        }
+        break;
+
+    case CKO_PRIVATE_KEY:
+        p = OSSL_PARAM_locate_const(params, OSSL_PKEY_PARAM_PRIV_KEY);
+        if (!p) {
+            P11PROV_raise(ctx, CKR_KEY_INDIGESTIBLE, "Missing %s",
+                          OSSL_PKEY_PARAM_PRIV_KEY);
+            return CKR_KEY_INDIGESTIBLE;
+        }
+
+        rv = p11prov_kmgmt_privkey_to_id(
+            ctx, attrs, &numattrs, (const uint8_t *)"ML-KEM", 6,
+            (const uint8_t *)&param_set, sizeof(param_set), p->data,
+            p->data_size);
+        if (rv != CKR_OK) {
+            goto done;
+        }
+        break;
+
+    default:
+        return CKR_GENERAL_ERROR;
+    }
+
+    /* common params */
+    rv = p11prov_kmgmt_param_data_to_attr(attrs, &numattrs, CKA_PARAMETER_SET,
+                                          (uint8_t *)&param_set,
+                                          sizeof(param_set), false);
+    if (rv != CKR_OK) {
+        goto done;
+    }
+
+    p11prov_obj_set_key_bits(obj, key_size * 8, key_size);
+    *out_numattrs = numattrs;
+    rv = CKR_OK;
+
+done:
+    if (rv != CKR_OK) {
+        for (int i = 0; i < numattrs; i++) {
+            OPENSSL_free(attrs[i].pValue);
+            attrs[i].pValue = NULL;
+        }
+        *out_numattrs = 0;
+    }
+    return rv;
+}
+
+static void *p11prov_mlkem_new_int(void *provctx,
+                                   CK_ML_KEM_PARAMETER_SET_TYPE param_set)
+{
+    P11PROV_OBJ *key;
+
     P11PROV_debug("mlkem new");
-    return p11prov_kmgmt_new(provctx, CKK_ML_KEM);
+    key = p11prov_kmgmt_new(provctx, CKK_ML_KEM);
+    if (key) {
+        p11prov_obj_set_key_params(key, param_set);
+        p11prov_obj_set_get_template(key, p11prov_mlkem_get_template);
+        p11prov_obj_set_get_find_attrs(key, p11prov_mlkem_get_find_attrs);
+    }
+    return key;
+}
+
+static void *p11prov_mlkem_512_new(void *provctx)
+{
+    return p11prov_mlkem_new_int(provctx, CKP_ML_KEM_512);
+}
+
+static void *p11prov_mlkem_768_new(void *provctx)
+{
+    return p11prov_mlkem_new_int(provctx, CKP_ML_KEM_768);
+}
+
+static void *p11prov_mlkem_1024_new(void *provctx)
+{
+    return p11prov_mlkem_new_int(provctx, CKP_ML_KEM_1024);
 }
 
 static void *p11prov_mlkem_gen_init_int(void *provctx, int selection,
@@ -87,9 +321,6 @@ static const OSSL_PARAM *p11prov_mlkem_gen_settable_params(void *genctx,
     return p11prov_mlkem_params;
 }
 
-extern const CK_BBOOL val_true;
-extern const CK_BBOOL val_false;
-
 static void *p11prov_mlkem_gen(void *genctx, OSSL_CALLBACK *cb_fn, void *cb_arg)
 {
     struct key_generator *ctx = (struct key_generator *)genctx;
@@ -137,26 +368,12 @@ static int p11prov_mlkem_match(const void *keydata1, const void *keydata2,
     return p11prov_kmgmt_match(keydata1, keydata2, CKK_ML_KEM, selection);
 }
 
-static int p11prov_mlkem_512_import(void *keydata, int selection,
-                                    const OSSL_PARAM params[])
+static int p11prov_mlkem_import(void *keydata, int selection,
+                                const OSSL_PARAM params[])
 {
-    return p11prov_kmgmt_import(CKK_ML_KEM, CKP_ML_KEM_512,
-                                OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
-                                params);
-}
-
-static int p11prov_mlkem_768_import(void *keydata, int selection,
-                                    const OSSL_PARAM params[])
-{
-    return p11prov_kmgmt_import(CKK_ML_KEM, CKP_ML_KEM_768,
-                                OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
-                                params);
-}
-
-static int p11prov_mlkem_1024_import(void *keydata, int selection,
-                                     const OSSL_PARAM params[])
-{
-    return p11prov_kmgmt_import(CKK_ML_KEM, CKP_ML_KEM_1024,
+    p11prov_obj_set_get_find_attrs((P11PROV_OBJ *)keydata,
+                                   p11prov_mlkem_get_find_attrs);
+    return p11prov_kmgmt_import(CKK_ML_KEM, CK_UNAVAILABLE_INFORMATION,
                                 OSSL_PKEY_PARAM_PRIV_KEY, keydata, selection,
                                 params);
 }
@@ -292,7 +509,7 @@ static const OSSL_PARAM *p11prov_mlkem_gettable_params(void *provctx)
 }
 
 const OSSL_DISPATCH p11prov_mlkem512_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mlkem, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mlkem_512, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mlkem_512, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mlkem, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -302,7 +519,7 @@ const OSSL_DISPATCH p11prov_mlkem512_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mlkem, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mlkem_512, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mlkem, EXPORT_TYPES, export_types),
@@ -312,7 +529,7 @@ const OSSL_DISPATCH p11prov_mlkem512_keymgmt_functions[] = {
 };
 
 const OSSL_DISPATCH p11prov_mlkem768_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mlkem, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mlkem_768, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mlkem_768, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mlkem, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -322,7 +539,7 @@ const OSSL_DISPATCH p11prov_mlkem768_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mlkem, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mlkem_768, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mlkem, EXPORT_TYPES, export_types),
@@ -332,7 +549,7 @@ const OSSL_DISPATCH p11prov_mlkem768_keymgmt_functions[] = {
 };
 
 const OSSL_DISPATCH p11prov_mlkem1024_keymgmt_functions[] = {
-    DISPATCH_KEYMGMT_ELEM(mlkem, NEW, new),
+    DISPATCH_KEYMGMT_ELEM(mlkem_1024, NEW, new),
     DISPATCH_KEYMGMT_ELEM(mlkem_1024, GEN_INIT, gen_init),
     DISPATCH_KEYMGMT_ELEM(mlkem, GEN, gen),
     DISPATCH_KEYMGMT_ELEM(kmgmt, GEN_CLEANUP, gen_cleanup),
@@ -342,7 +559,7 @@ const OSSL_DISPATCH p11prov_mlkem1024_keymgmt_functions[] = {
     DISPATCH_KEYMGMT_ELEM(kmgmt, FREE, free),
     DISPATCH_KEYMGMT_ELEM(kmgmt, HAS, has),
     DISPATCH_KEYMGMT_ELEM(mlkem, MATCH, match),
-    DISPATCH_KEYMGMT_ELEM(mlkem_1024, IMPORT, import),
+    DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT, import),
     DISPATCH_KEYMGMT_ELEM(mlkem, IMPORT_TYPES, import_types),
     DISPATCH_KEYMGMT_ELEM(kmgmt, EXPORT, export),
     DISPATCH_KEYMGMT_ELEM(mlkem, EXPORT_TYPES, export_types),
