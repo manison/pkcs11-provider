@@ -111,6 +111,13 @@
     <Link>
     </Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32' And '$(DisableX86Optimizations)' == 'true'">
+    <ClCompile>
+      <Optimization>Custom</Optimization>
+    </ClCompile>
+    <Link>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\asymmetric_cipher.c" />
     <ClCompile Include="src\cipher.c" />
