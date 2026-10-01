@@ -6,7 +6,13 @@
 
 #include <stddef.h>
 
+#ifdef WIN32
+#pragma pack(push, 1)
+#endif
 #include "pkcs11.h"
+#ifdef WIN32
+#pragma pack(pop)
+#endif
 
 CK_RV p11prov_decode_ec_point_value(CK_KEY_TYPE key_type,
                                     CK_ULONG expected_size,
