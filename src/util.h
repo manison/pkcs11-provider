@@ -4,6 +4,10 @@
 #ifndef _UTIL_H
 #define _UTIL_H
 
+#if defined(_WIN32)
+#include <pthread.h>
+#endif
+
 #define CKATTR_ASSIGN(x, _a, _b, _c) \
     do { \
         x.type = (_a); \

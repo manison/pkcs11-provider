@@ -104,7 +104,7 @@ endforeach
 # them in glibc (for example el8). We do have them already when we run
 # the provider library and load that from openssl as openssl has them already
 # linked in, but we need them for linking self-contained binaries.
-dl_dep = cc.find_library('dl', required: false)
+dl_dep = cc.find_library('dl', required: host_system == 'windows')
 pthread_dep = dependency('threads')
 
 functions = [

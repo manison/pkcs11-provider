@@ -59,8 +59,9 @@
 #define bswap_32(x) BSWAP_32(x)
 #define bswap_64(x) BSWAP_64(x)
 
-#elif defined(__ANDROID__) || defined(__CYGWIN__) || defined(__GNUC__) || \
-	defined(__GNU__)
+#elif !defined(_WIN32) \
+    && (defined(__ANDROID__) || defined(__CYGWIN__) || defined(__GNUC__) \
+        || defined(__GNU__))
 
 #include <byteswap.h>
 #include <endian.h>
