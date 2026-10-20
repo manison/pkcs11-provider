@@ -222,8 +222,8 @@ static int p11prov_common_export(void *keydata, int selection,
         int ret = RET_OSSL_ERR;
         CK_ULONG key_size;
 
-        rv = p11prov_try_session_ref(key, CK_UNAVAILABLE_INFORMATION, false,
-                                     false, &session);
+        rv = p11prov_try_session_ref(key, CK_UNAVAILABLE_INFORMATION,
+                                     LOGIN_NOT_REQUIRED, false, &session);
         if (rv != CKR_OK) {
             P11PROV_raise(ctx, rv, "Failed to get session for export");
             return RET_OSSL_ERR;
@@ -390,7 +390,7 @@ static void *p11prov_common_generate(void *provctx, CK_MECHANISM_TYPE mech_type,
     }
 
     rv = p11prov_get_session(ctx, &slotid, NULL, uri, mech.mechanism, NULL,
-                             NULL, true, true, &session);
+                             NULL, LOGIN_REQUIRED, true, &session);
     if (rv != CKR_OK) {
         P11PROV_raise(ctx, rv, "Failed to get PKCS#11 session");
         goto done;

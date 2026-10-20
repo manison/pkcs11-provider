@@ -88,8 +88,8 @@ static int p11prov_rand_generate(void *pctx, unsigned char *out, size_t outlen,
     P11PROV_debug("rand: generate (add bytes: %zu)", adin_len);
 
     ret = p11prov_get_session(ctx->provctx, &ctx->slotid, NULL, NULL,
-                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, false,
-                              false, &session);
+                              CK_UNAVAILABLE_INFORMATION, NULL, NULL,
+                              LOGIN_NOT_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         return res;
     }
@@ -123,8 +123,8 @@ static int p11prov_rand_reseed(void *pctx, int prediction_resistance,
                   adin_len);
 
     ret = p11prov_get_session(ctx->provctx, &ctx->slotid, NULL, NULL,
-                              CK_UNAVAILABLE_INFORMATION, NULL, NULL, false,
-                              false, &session);
+                              CK_UNAVAILABLE_INFORMATION, NULL, NULL,
+                              LOGIN_NOT_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         return res;
     }

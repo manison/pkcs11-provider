@@ -226,8 +226,8 @@ int p11prov_kmgmt_gen(struct key_generator *ctx, CK_ATTRIBUTE *pubkey_template,
     }
 
     ret = p11prov_get_session(ctx->provctx, &slotid, NULL, ctx->uri,
-                              ctx->mechanism.mechanism, NULL, NULL, true, true,
-                              &session);
+                              ctx->mechanism.mechanism, NULL, NULL,
+                              LOGIN_REQUIRED, true, &session);
     if (ret != CKR_OK) {
         return ret;
     }

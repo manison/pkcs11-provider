@@ -158,7 +158,7 @@ static void store_fetch(struct p11prov_store_ctx *ctx,
     CK_SLOT_ID nextid = CK_UNAVAILABLE_INFORMATION;
     P11PROV_URI *search_uri = NULL;
     int login_behavior;
-    bool login = false;
+    enum p11prov_login_request login = LOGIN_NOT_REQUIRED;
     CK_RV ret;
 
     P11PROV_debug("called (store_ctx=%p)", ctx);
@@ -166,12 +166,12 @@ static void store_fetch(struct p11prov_store_ctx *ctx,
 
     if (ctx->expect == 0 || ctx->expect == OSSL_STORE_INFO_PKEY
         || login_behavior == PUBKEY_LOGIN_ALWAYS) {
-        login = true;
+        login = LOGIN_REQUIRED;
     }
     if ((p11prov_uri_get_class(ctx->parsed_uri) == CKO_PUBLIC_KEY
          || p11prov_uri_get_class(ctx->parsed_uri) == CKO_CERTIFICATE)
         && login_behavior != PUBKEY_LOGIN_ALWAYS) {
-        login = false;
+        login = LOGIN_NOT_REQUIRED;
     }
 
     search_uri = construct_search_uri(ctx);
@@ -233,13 +233,13 @@ again:
     /* Given the variety of tokens, if we found no object at all, and we did
      * *not* set login required, we retry again, after setting login required.
      * This accounts for HW that requires a login even for public objects */
-    if (login == false && ctx->num_objs == 0
+    if (login == LOGIN_NOT_REQUIRED && ctx->num_objs == 0
         && login_behavior != PUBKEY_LOGIN_NEVER) {
         P11PROV_debug("No object found. Retrying with login (store_ctx=%p)",
                       ctx);
         slotid = CK_UNAVAILABLE_INFORMATION;
         ctx->loaded = 0;
-        login = true;
+        login = LOGIN_REQUIRED;
         goto again;
     }
 

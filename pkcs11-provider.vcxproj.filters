@@ -143,6 +143,9 @@
       <Filter>obj</Filter>
     </ClInclude>
     <ClInclude Include="src\registration.h" />
+    <ClInclude Include="src\platform\endian.h">
+      <Filter>platform</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="platform">

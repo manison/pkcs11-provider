@@ -149,7 +149,7 @@ static CK_RV p11prov_create_secret_key_fallback(P11PROV_CTX *provctx,
     *session = NULL;
 
     ret = p11prov_get_session(provctx, &slotid, NULL, NULL, mech_type, NULL,
-                              NULL, true, false, session);
+                              NULL, LOGIN_REQUIRED, false, session);
     if (ret != CKR_OK) {
         return ret;
     }
@@ -170,8 +170,8 @@ static CK_RV inner_pkcs11_key(P11PROV_KDF_CTX *hkdfctx,
 
     if (hkdfctx->session == NULL) {
         ret = p11prov_get_session(hkdfctx->provctx, &slotid, NULL, NULL,
-                                  mech_type, NULL, NULL, false, false,
-                                  &hkdfctx->session);
+                                  mech_type, NULL, NULL, LOGIN_NOT_REQUIRED,
+                                  false, &hkdfctx->session);
         if (ret != CKR_OK) {
             return ret;
         }
@@ -1168,8 +1168,8 @@ static int p11prov_sshkdf_set_ctx_params(void *ctx, const OSSL_PARAM params[])
 
         if (kctx->session == NULL) {
             rv = p11prov_get_session(kctx->provctx, &slotid, NULL, NULL,
-                                     mech_type, NULL, NULL, false, false,
-                                     &kctx->session);
+                                     mech_type, NULL, NULL, LOGIN_NOT_REQUIRED,
+                                     false, &kctx->session);
             if (rv != CKR_OK) {
                 return RET_OSSL_ERR;
             }
@@ -1251,7 +1251,7 @@ static CK_RV p11prov_sshkdf_fallback_session(P11PROV_SSHKDF_CTX *kctx,
 
     ret =
         p11prov_get_session(kctx->provctx, &slotid, NULL, NULL, kctx->hash_mech,
-                            NULL, NULL, false, false, &session);
+                            NULL, NULL, LOGIN_NOT_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         return ret;
     }
@@ -1264,7 +1264,7 @@ static CK_RV p11prov_sshkdf_fallback_session(P11PROV_SSHKDF_CTX *kctx,
         int num = 0;
 
         ret = p11prov_try_session_ref(kctx->key, CK_UNAVAILABLE_INFORMATION,
-                                      false, false, &orig_session);
+                                      LOGIN_NOT_REQUIRED, false, &orig_session);
         if (ret == CKR_OK) {
             FA_SET_BUF_ALLOC(attrs, num, CKA_VALUE, false);
             ret = p11prov_fetch_attributes(kctx->provctx, orig_session,
@@ -1364,8 +1364,9 @@ static int p11prov_sshkdf_derive(void *ctx, unsigned char *key, size_t keylen,
     }
 
     if (kctx->session == NULL) {
-        ret = p11prov_try_session_ref(kctx->key, kctx->hash_mech, false, false,
-                                      &kctx->session);
+        ret =
+            p11prov_try_session_ref(kctx->key, kctx->hash_mech,
+                                    LOGIN_NOT_REQUIRED, false, &kctx->session);
         if (ret == CKR_MECHANISM_INVALID && kctx->from_skey) {
             /* if the key was provided via set_skey it may have been
              * created on the wrong slot, try the fallback which will

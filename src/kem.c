@@ -199,8 +199,8 @@ static int p11prov_mlkem_encapsulate(void *vctx, unsigned char *ct,
         return RET_OSSL_ERR;
     }
 
-    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, false, false,
-                                 &session);
+    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, LOGIN_NOT_REQUIRED,
+                                 false, &session);
     if (rv != CKR_OK) {
         P11PROV_raise(ctx->provctx, rv, "Failed to acquire session");
         return RET_OSSL_ERR;
@@ -300,8 +300,8 @@ static int p11prov_mlkem_decapsulate(void *vctx, unsigned char *ss,
         return RET_OSSL_ERR;
     }
 
-    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, false, false,
-                                 &session);
+    rv = p11prov_try_session_ref(ctx->key, mech.mechanism, LOGIN_NOT_REQUIRED,
+                                 false, &session);
     if (rv != CKR_OK) {
         P11PROV_raise(ctx->provctx, rv, "Failed to acquire session");
         return RET_OSSL_ERR;

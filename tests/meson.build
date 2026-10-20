@@ -106,6 +106,7 @@ test_programs = {
   'tcmpkeys': ['tcmpkeys.c', 'util.c'],
   'tcachekeys': ['tcachekeys.c', 'util.c'],
   'tfork': ['tfork.c', 'util.c'],
+  'tforkslot': ['tforkslot.c', 'util.c'],
   'tstorepubkey': ['tstorepubkey.c', 'util.c'],
   'tstorepubkeyfree': ['tstorepubkeyfree.c', 'util.c'],
   'tpkey': ['tpkey.c', 'util.c'],
@@ -134,12 +135,24 @@ ec_point_test = executable(
   include_directories: [configinc, include_directories('../src')],
   dependencies: [libcrypto],
 )
+uri_parse_test = executable(
+  'turi_parse',
+  ['turi_parse.c'],
+  objects: pkcs11_provider.extract_all_objects(),
+  include_directories: [configinc, include_directories('../src')],
+  dependencies: [libcrypto, dl_dep, pthread_dep],
+)
 
 setup_script=find_program('setup.sh')
 all_suites=['softokn', 'softhsm', 'kryoptic', 'kryoptic.nss']
 test(
   'ec-point-decode',
   ec_point_test,
+  suite: ['unittests'] + all_suites,
+)
+test(
+  'uri-parse',
+  uri_parse_test,
   suite: ['unittests'] + all_suites,
 )
 foreach suite : all_suites + ['kryoptic.multislot']
@@ -158,6 +171,7 @@ tests = {
   'basic': {'suites': all_suites},
   'mlkem': {'suites': ['kryoptic']},
   'mldsa': {'suites': ['kryoptic']},
+  'slhdsa': {'suites': ['kryoptic']},
   'pubkey': {'suites': all_suites},
   'certs': {'suites': all_suites},
   'ecc': {'suites': all_suites},
@@ -191,6 +205,7 @@ tests = {
   'aead': {'suites': ['softokn', 'kryoptic', 'kryoptic.nss']},
   'op_state': {'suites': all_suites},
   'defaultslot': {'suites': ['kryoptic.multislot']},
+  'slotpin': {'suites': ['kryoptic.multislot']},
 }
 
 test_wrapper = find_program('test-wrapper')

@@ -41,7 +41,7 @@ void *p11prov_sig_dupctx(void *ctx)
     CK_OBJECT_HANDLE handle = CK_INVALID_HANDLE;
     CK_BYTE_PTR state = NULL;
     CK_ULONG state_len;
-    bool reqlogin = false;
+    enum p11prov_login_request login = LOGIN_NOT_REQUIRED;
     CK_RV ret;
 
     if (sigctx == NULL) {
@@ -52,7 +52,7 @@ void *p11prov_sig_dupctx(void *ctx)
 
     switch (sigctx->operation) {
     case CKF_SIGN:
-        reqlogin = true;
+        login = LOGIN_REQUIRED;
         /* fallthrough */
     case CKF_VERIFY:
         slotid = p11prov_obj_get_slotid(sigctx->key);
@@ -161,7 +161,7 @@ void *p11prov_sig_dupctx(void *ctx)
         }
 
         ret = p11prov_get_session(newctx->provctx, &slotid, NULL, NULL,
-                                  newctx->mechtype, NULL, NULL, reqlogin, false,
+                                  newctx->mechtype, NULL, NULL, login, false,
                                   &newctx->session);
         if (ret != CKR_OK) {
             P11PROV_raise(newctx->provctx, ret,
@@ -374,7 +374,7 @@ static CK_RV p11prov_sig_operate_init(P11PROV_SIG_CTX *sigctx, bool digest_op,
     CK_OBJECT_HANDLE handle;
     CK_SESSION_HANDLE sess;
     CK_SLOT_ID slotid;
-    bool reqlogin = false;
+    enum p11prov_login_request login = LOGIN_NOT_REQUIRED;
     bool always_auth = false;
     CK_RV ret;
 
@@ -407,11 +407,11 @@ static CK_RV p11prov_sig_operate_init(P11PROV_SIG_CTX *sigctx, bool digest_op,
                             sigctx->mechanism.mechanism);
 
     if (sigctx->operation == CKF_SIGN) {
-        reqlogin = true;
+        login = LOGIN_REQUIRED;
     }
 
     ret = p11prov_try_session_ref(sigctx->key, sigctx->mechanism.mechanism,
-                                  reqlogin, false, &session);
+                                  login, false, &session);
     switch (ret) {
     case CKR_OK:
         sess = p11prov_session_handle(session);
@@ -451,7 +451,7 @@ static CK_RV p11prov_sig_operate_init(P11PROV_SIG_CTX *sigctx, bool digest_op,
         goto done;
     }
 
-    if (reqlogin) {
+    if (login == LOGIN_REQUIRED) {
         always_auth =
             p11prov_obj_get_bool(sigctx->key, CKA_ALWAYS_AUTHENTICATE, false);
     }

@@ -180,6 +180,7 @@
     <ClInclude Include="src\obj\object.h" />
     <ClInclude Include="src\pk11_uri.h" />
     <ClInclude Include="src\pkcs11.h" />
+    <ClInclude Include="src\platform\endian.h" />
     <ClInclude Include="src\platform\windows\win_atomic.h" />
     <ClInclude Include="src\platform\windows\win_compat.h" />
     <ClInclude Include="src\platform\windows\win_dlfcn.h" />

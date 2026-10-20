@@ -75,8 +75,8 @@ CK_RV p11prov_derive_key(P11PROV_OBJ *key, CK_MECHANISM *mechanism,
     }
 
     if (!session) {
-        ret = p11prov_try_session_ref(key, mechanism->mechanism, false, false,
-                                      &session);
+        ret = p11prov_try_session_ref(key, mechanism->mechanism,
+                                      LOGIN_NOT_REQUIRED, false, &session);
         if (ret != CKR_OK) {
             P11PROV_raise(ctx, ret, "Failed to acquire session");
             return ret;

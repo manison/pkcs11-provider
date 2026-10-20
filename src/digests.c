@@ -209,8 +209,8 @@ static void *p11prov_digest_dupctx(void *ctx)
     }
 
     ret = p11prov_get_session(newctx->provctx, &slotid, NULL, NULL,
-                              newctx->mechtype, NULL, NULL, false, false,
-                              &newctx->session);
+                              newctx->mechtype, NULL, NULL, LOGIN_NOT_REQUIRED,
+                              false, &newctx->session);
     if (ret != CKR_OK) {
         P11PROV_raise(dctx->provctx, ret, "Failed to open new session");
         goto done;
@@ -289,9 +289,9 @@ static int p11prov_digest_init(void *ctx, const OSSL_PARAM params[])
         }
     }
 
-    ret =
-        p11prov_get_session(dctx->provctx, &slotid, NULL, NULL, dctx->mechtype,
-                            NULL, NULL, false, false, &dctx->session);
+    ret = p11prov_get_session(dctx->provctx, &slotid, NULL, NULL,
+                              dctx->mechtype, NULL, NULL, LOGIN_NOT_REQUIRED,
+                              false, &dctx->session);
     if (ret != CKR_OK) {
         P11PROV_raise(dctx->provctx, ret, "Failed to open new session");
         return RET_OSSL_ERR;

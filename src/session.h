@@ -12,15 +12,24 @@ void p11prov_session_pool_fork_reset(P11PROV_SESSION_POOL *pool);
 
 CK_SESSION_HANDLE p11prov_session_handle(P11PROV_SESSION *session);
 CK_SLOT_ID p11prov_session_slotid(P11PROV_SESSION *session);
+/* How a login session is obtained */
+enum p11prov_login_request {
+    LOGIN_REQUIRED, /* log in, waiting for a busy login session if needed */
+    LOGIN_NOT_REQUIRED, /* do not log in and do not fail if not logged in */
+    LOGIN_ONLY_CACHED, /* use an existing login session, never log in */
+};
+
 CK_RV p11prov_get_session(P11PROV_CTX *provctx, CK_SLOT_ID *slotid,
                           CK_SLOT_ID *next_slotid, P11PROV_URI *uri,
                           CK_MECHANISM_TYPE mechtype,
                           OSSL_PASSPHRASE_CALLBACK *pw_cb, void *pw_cbarg,
-                          bool reqlogin, bool rw, P11PROV_SESSION **session);
+                          enum p11prov_login_request login, bool rw,
+                          P11PROV_SESSION **session);
 CK_RV p11prov_try_session_ref(P11PROV_OBJ *obj, CK_MECHANISM_TYPE mechtype,
-                              bool reqlogin, bool rw,
+                              enum p11prov_login_request login, bool rw,
                               P11PROV_SESSION **_session);
 CK_RV p11prov_take_login_session(P11PROV_CTX *provctx, CK_SLOT_ID slotid,
+                                 enum p11prov_login_request login,
                                  P11PROV_SESSION **_session);
 void p11prov_return_session(P11PROV_SESSION *session);
 void p11prov_session_ref(P11PROV_SESSION *session);

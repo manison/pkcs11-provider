@@ -211,7 +211,7 @@ static CK_RV p11prov_interface_init(P11PROV_MODULE *mctx)
     P11PROV_INTERFACE *intf;
     CK_UTF8CHAR_PTR intf_name = (CK_UTF8CHAR_PTR) "PKCS 11";
     CK_VERSION version = { 3, 2 };
-    CK_INTERFACE *ck_interface;
+    CK_INTERFACE *ck_interface = NULL;
     CK_RV ret;
 
     intf = OPENSSL_zalloc(sizeof(struct p11prov_interface));

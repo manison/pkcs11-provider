@@ -184,8 +184,8 @@ static int p11prov_rsaenc_encrypt(void *ctx, unsigned char *out, size_t *outlen,
         return RET_OSSL_ERR;
     }
 
-    ret = p11prov_try_session_ref(encctx->key, mechanism.mechanism, false,
-                                  false, &session);
+    ret = p11prov_try_session_ref(encctx->key, mechanism.mechanism,
+                                  LOGIN_NOT_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         P11PROV_raise(encctx->provctx, ret, "Failed to acquire session");
         return RET_OSSL_ERR;
@@ -358,8 +358,8 @@ static int p11prov_rsaenc_decrypt(void *ctx, unsigned char *out, size_t *outlen,
         goto done;
     }
 
-    ret = p11prov_try_session_ref(encctx->key, mechanism.mechanism, true, false,
-                                  &session);
+    ret = p11prov_try_session_ref(encctx->key, mechanism.mechanism,
+                                  LOGIN_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         P11PROV_raise(encctx->provctx, ret, "Failed to acquire session");
         result = RET_OSSL_ERR;

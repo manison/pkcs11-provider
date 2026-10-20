@@ -267,8 +267,8 @@ static CK_RV store_key(P11PROV_OBJ *key, P11PROV_SESSION *in_session,
         }
 
         rv = p11prov_get_session(key->ctx, &slot, NULL, key->refresh_uri,
-                                 CK_UNAVAILABLE_INFORMATION, NULL, NULL, false,
-                                 true, &session);
+                                 CK_UNAVAILABLE_INFORMATION, NULL, NULL,
+                                 LOGIN_NOT_REQUIRED, true, &session);
         if (rv != CKR_OK) {
             goto done;
         }

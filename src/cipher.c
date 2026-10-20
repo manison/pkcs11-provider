@@ -585,8 +585,8 @@ static CK_RV p11prov_cipher_session_init(struct p11prov_cipher_ctx *cctx)
         cctx->mech.mechanism = CKM_AES_CBC;
     }
 
-    rv = p11prov_try_session_ref(cctx->key, cctx->mech.mechanism, true, false,
-                                 &cctx->session);
+    rv = p11prov_try_session_ref(cctx->key, cctx->mech.mechanism,
+                                 LOGIN_REQUIRED, false, &cctx->session);
     if (rv != CKR_OK) {
         return rv;
     }

@@ -666,8 +666,8 @@ P11PROV_OBJ *p11prov_obj_find_associated(P11PROV_OBJ *obj,
     CKATTR_ASSIGN(template[0], CKA_CLASS, &class, sizeof(class));
     template[1] = *id;
 
-    ret = p11prov_try_session_ref(obj, CK_UNAVAILABLE_INFORMATION, false, false,
-                                  &session);
+    ret = p11prov_try_session_ref(obj, CK_UNAVAILABLE_INFORMATION,
+                                  LOGIN_NOT_REQUIRED, false, &session);
     if (ret != CKR_OK) {
         goto done;
     }
